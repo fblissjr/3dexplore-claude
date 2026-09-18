@@ -1,0 +1,21 @@
+# Generated geometry. The script that makes it is the source of truth.
+out/
+
+# Your own images, scans and drawings. Shipped examples live in samples/.
+inputs/
+
+# Your printer captures: each describes one printer and its loaded spools, so
+# none ships. profiles/README.md says how to make yours.
+profiles/*
+!profiles/README.md
+
+# Where the Claude desktop app drops delivered files.
+Claude outputs/
+
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.venv/
+.DS_Store

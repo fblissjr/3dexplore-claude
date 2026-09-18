@@ -1,0 +1,19 @@
+Third-party material in this repository
+
+samples/shrug.svg
+samples/shrug_emo.svg
+samples/shrug_emo_streak.svg
+
+  The shrug dude emoji, from Twemoji.
+  Copyright Twitter, Inc and other contributors.
+  Graphics licensed under CC-BY 4.0: https://creativecommons.org/licenses/by/4.0/
+  Source: https://github.com/jdecked/twemoji
+
+  shrug.svg is the original artwork. shrug_emo.svg adds one path (a side-swept
+  fringe in the hair's own colour); shrug_emo_streak.svg adds a second path (a
+  red streak). Those two files are modified versions.
+
+Everything else is covered by LICENSE.
+
+Bambu Lab, Bambu Studio, X2D and AMS are trademarks of their owners. This
+project is not affiliated with or endorsed by Bambu Lab.

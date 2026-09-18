@@ -1,0 +1,1013 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>STL / 3MF Viewer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<!--
+  3dexplore-claude model viewer. Serve it from app.py (http://127.0.0.1:8765/viewer);
+  opening the file directly works but falls back to generic numbers and says so.
+
+  What it is for: looking at a .3mf or .stl before committing print time, and
+  seeing the half of a Bambu .3mf that a plain geometry viewer discards --
+  Metadata/model_settings.config, which says what filament slot each part
+  prints in. Without that you cannot tell a two-colour plaque from a lump.
+
+  Every machine and filament number is fetched from /api/machine, which reads
+  the captured profile. This file used to carry its own: a 220 mm bed, PLA at
+  1.24 g/cm3, a 45 degree overhang line and 20% infill. Three of those four are
+  wrong for this printer (256 mm, 1.26 and 1.32 for the matte, 30 degrees,
+  15%), which is exactly why they do not live here any more.
+
+  Weight is an upper bound and labelled as one. Solid volume x density reads
+  15.17 g against a name plaque's real 13.40 g slice, +13%. The old "x 0.35
+  for 20% infill" line read 5.3 g for the same plate, 60% under, because that
+  multiplier was tuned on chunky parts and a plate is nearly all wall and skin.
+  For a real number, slice it.
+
+  Preflight posts to /api/inspect, because overlap and seam gaps between parts
+  are cross_check's job and that runs in Python, not here.
+-->
+<style>
+  :root {
+    --bg: #1e1e1e;
+    --fg: #e8e8e8;
+    --accent: #ffa726;
+    --good: #66bb6a;
+    --warn: #ffca28;
+    --bad: #ef5350;
+    --panel: rgba(30, 30, 30, 0.92);
+    --border: rgba(255, 255, 255, 0.1);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--fg); font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif; overflow: hidden; }
+  #scene { position: absolute; inset: 0; }
+  #ui {
+    position: absolute; top: 16px; left: 16px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 16px; width: 280px;
+    backdrop-filter: blur(8px);
+    font-size: 13px; line-height: 1.5;
+    max-height: calc(100vh - 32px); overflow-y: auto;
+  }
+  #ui h1 { margin: 0 0 10px; font-size: 14px; font-weight: 600; color: var(--accent); }
+  #ui h2 { margin: 14px 0 6px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: rgba(255,255,255,0.5); border-top: 1px solid var(--border); padding-top: 12px; }
+  #ui h2:first-of-type { border-top: none; padding-top: 0; }
+  #ui label.file-btn {
+    display: inline-block; cursor: pointer;
+    background: var(--accent); color: #222; font-weight: 600;
+    padding: 6px 12px; border-radius: 6px; font-size: 12px;
+  }
+  #ui input[type="file"] { display: none; }
+  #ui .row { display: flex; justify-content: space-between; gap: 12px; }
+  #ui .row + .row { margin-top: 4px; }
+  #ui .row .k { opacity: 0.6; }
+  #ui .row .v { font-variant-numeric: tabular-nums; }
+  #ui label.opt { display: flex; align-items: center; gap: 6px; font-size: 12px; user-select: none; cursor: pointer; }
+  #ui label.opt + label.opt { margin-top: 4px; }
+  .orient-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
+  .orient-grid button {
+    background: transparent; color: var(--fg); border: 1px solid var(--border);
+    padding: 6px 0; border-radius: 4px; cursor: pointer; font-family: inherit;
+    font-size: 11px; font-variant-numeric: tabular-nums;
+  }
+  .orient-grid button:hover { border-color: var(--accent); }
+  .orient-grid button.active { background: var(--accent); color: #222; border-color: var(--accent); font-weight: 600; }
+  .orient-grid button.best::after { content: ' ✓'; color: var(--good); font-weight: 700; }
+  .orient-grid button.active.best::after { color: #222; }
+  .weight-badge {
+    display: inline-block; padding: 2px 8px; border-radius: 4px;
+    font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums;
+  }
+  .weight-badge.good { background: var(--good); color: #0a2010; }
+  .weight-badge.warn { background: var(--warn); color: #3a2a00; }
+  .weight-badge.bad { background: var(--bad); color: #fff; }
+  #drop-overlay {
+    position: absolute; inset: 0; display: none;
+    align-items: center; justify-content: center;
+    background: rgba(255, 167, 38, 0.15); border: 3px dashed var(--accent);
+    font-size: 24px; color: var(--accent); pointer-events: none; z-index: 10;
+  }
+  #drop-overlay.active { display: flex; }
+  #empty {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 12px;
+    opacity: 0.5; pointer-events: none; font-size: 16px;
+  }
+  #empty.hidden { display: none; }
+  #empty .hint { font-size: 13px; }
+  #progress {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    background: var(--panel); padding: 16px 24px; border-radius: 8px;
+    font-size: 13px; display: none; z-index: 20; border: 1px solid var(--border);
+  }
+  #progress.active { display: block; }
+  .axis-label { position: absolute; bottom: 12px; right: 16px; font-size: 11px; opacity: 0.4; }
+  .legend { display: flex; gap: 12px; font-size: 11px; margin-top: 4px; }
+  .legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }
+</style>
+</head>
+<body>
+<div id="scene"></div>
+<div id="drop-overlay">Drop STL or 3MF to load</div>
+<div id="empty">
+  <div>No model loaded</div>
+  <div class="hint">Drop an .stl or .3mf file anywhere on this page</div>
+</div>
+<div id="progress">Loading…</div>
+
+<div id="ui">
+  <div id="machine-banner" style="display:none;background:#5a3a1a;border:1px solid #a97;color:#fc9;padding:6px 8px;border-radius:4px;font-size:11px;margin-bottom:8px;"></div>
+  <div class="row"><span class="k">Machine</span><span class="v" id="machine-name">—</span></div>
+  <h1>STL / 3MF Viewer</h1>
+  <label class="file-btn">Open file<input type="file" id="file-input" accept=".stl,.3mf"></label>
+
+  <h2>Model</h2>
+  <div class="row"><span class="k">File</span><span class="v" id="stat-file">—</span></div>
+  <div class="row"><span class="k">Triangles</span><span class="v" id="stat-tris">—</span></div>
+  <div class="row"><span class="k">Size (mm)</span><span class="v" id="stat-size">—</span></div>
+  <div class="row"><span class="k">Volume</span><span class="v" id="stat-vol">—</span></div>
+
+  <h2>Filament estimate <span style="font-weight:400;color:rgba(255,255,255,0.4);">PLA</span></h2>
+  <div class="row"><span class="k">Solid weight <span style="opacity:.5">(max)</span></span><span class="v" id="stat-solid">—</span></div>
+  <div class="row"><span class="k" id="label-infill">Floor at infill</span><span class="v" id="stat-realistic">—</span></div>
+  <div class="row"><span class="k">vs budget <input id="opt-cap" type="number" min="1" step="1" value="50" style="width:48px;background:#2a2a2a;color:var(--fg);border:1px solid var(--border);border-radius:4px;font-family:inherit;font-size:11px;padding:1px 3px;">g</span><span class="v" id="stat-cap">—</span></div>
+  <div class="row" id="row-scale" style="display:none;"><span class="k">Scale to fit</span><span class="v" id="stat-scale">—</span></div>
+
+  <h2>Orientation <span style="font-weight:400;color:rgba(255,255,255,0.4);" id="best-tag"></span></h2>
+  <div class="orient-grid" id="orient-grid">
+    <button data-axis="+X">+X up</button>
+    <button data-axis="+Y">+Y up</button>
+    <button data-axis="+Z" class="active">+Z up</button>
+    <button data-axis="-X">-X up</button>
+    <button data-axis="-Y">-Y up</button>
+    <button data-axis="-Z">-Z up</button>
+  </div>
+  <button id="btn-auto-orient" style="margin-top:6px;width:100%;background:transparent;color:var(--accent);border:1px solid var(--accent);padding:6px;border-radius:4px;cursor:pointer;font-family:inherit;font-size:11px;">Auto-orient (use best)</button>
+  <div class="row" style="margin-top:8px;"><span class="k">Overhang area</span><span class="v" id="stat-overhang">—</span></div>
+  <div class="row"><span class="k">Bed contact</span><span class="v" id="stat-contact">—</span></div>
+  <div class="row"><span class="k">Pieces</span><span class="v" id="stat-pieces">—</span></div>
+
+  <h2>Parts &amp; filament</h2>
+  <div id="parts-list"><div class="row"><span class="k">Parts</span><span class="v">—</span></div></div>
+
+  <h2>Preflight</h2>
+  <button id="btn-preflight" style="width:100%;background:transparent;color:var(--accent);border:1px solid var(--accent);padding:6px;border-radius:4px;cursor:pointer;font-family:inherit;font-size:11px;">Check this .3mf</button>
+  <div id="preflight-out" style="font-size:11px;margin-top:6px;opacity:.8;"></div>
+
+  <h2>Display</h2>
+  <label class="opt">Color by
+    <select id="opt-color" style="background:#2a2a2a;color:var(--fg);border:1px solid var(--border);border-radius:4px;padding:2px 4px;font-family:inherit;font-size:12px;">
+      <option value="overhang" selected>Overhangs</option>
+      <option value="piece">Pieces (one color each)</option>
+      <option value="solid">Solid</option>
+    </select>
+  </label>
+  <div class="legend" id="legend-overhang" style="margin-left:18px;margin-bottom:6px;"><span><span class="sw" style="background:#ef5350"></span>overhang &gt;45°</span><span><span class="sw" style="background:#ffa726"></span>printable</span></div>
+  <label class="opt" style="margin-top:8px;"><input type="checkbox" id="opt-slice"> Slice view (cross-section)</label>
+  <div id="slice-controls" style="display:none;margin:4px 0 4px 18px;">
+    <input type="range" id="slice-z" min="0" max="100" step="0.1" value="50" style="width:100%;">
+    <div style="font-size:11px;opacity:0.6;font-variant-numeric:tabular-nums;" id="slice-label">Z = 0 mm</div>
+  </div>
+  <label class="opt"><input type="checkbox" id="opt-wire"> Wireframe overlay</label>
+  <label class="opt"><input type="checkbox" id="opt-bbox"> Show bounding box</label>
+  <label class="opt"><input type="checkbox" id="opt-grid" checked> <span id="bed-label">Show build plate</span></label>
+  <label class="opt"><input type="checkbox" id="opt-spin"> Auto-rotate</label>
+
+  <h2>Export</h2>
+  <button id="btn-snapshot" style="width:100%;background:var(--accent);color:#222;border:none;padding:8px;border-radius:6px;cursor:pointer;font-family:inherit;font-size:12px;font-weight:600;">Save snapshot PNG</button>
+</div>
+
+<div class="axis-label">+Z up · units: mm</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+    "fflate": "https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { STLLoader } from 'three/addons/loaders/STLLoader.js';
+import { mergeGeometries, toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
+import * as fflate from 'fflate';
+
+// ---- machine facts -------------------------------------------------------
+// These used to be constants written for a different printer, and three of the
+// four were wrong for this one: density 1.24 (the capture says 1.26, and 1.32
+// for PLA Matte), a 45 degree overhang line (support_threshold_angle
+// is 30), and 20% infill (sparse_infill_density is 15%). So the page asks the
+// server instead, and says so out loud when it cannot.
+//
+// The fallbacks below are NOT a quiet default. If they are ever used the page
+// shows a banner, because a viewer reporting confident numbers for the wrong
+// machine is worse than one that admits it does not know -- the same reason a
+// preview in invented colours is worse than no preview.
+const FALLBACK = {
+  name: 'unknown printer', bed_mm: [256, 256, 261], layer_h_mm: 0.2,
+  line_width_mm: 0.42, min_feature_mm: 0.84, overhang_deg: 45, infill: 0.2,
+  filaments: {},
+};
+let MACHINE = FALLBACK;
+let MACHINE_IS_REAL = false;
+const DEFAULT_DENSITY = 1.24;        // only when no profile is loaded
+const STABLE_CONTACT_MM2 = 100.0;
+
+// Overhang is measured against the slicer's own threshold. The angle is from
+// vertical: a face whose normal tips more than (90 - threshold) below
+// horizontal needs support.
+let OVERHANG_DOT = -Math.cos(Math.PI / 4);
+// support_threshold_angle is a slope measured from horizontal: a downward face
+// at slope t has normal z = -cos(t), and needs support when t is below the
+// threshold. The old -cos(90 - deg) agreed with this only at 45 degrees.
+function setOverhang(deg) { OVERHANG_DOT = -Math.cos(deg * Math.PI / 180); }
+// Part names and preflight errors come out of an uploaded file: text, never markup.
+const esc = v => String(v).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+
+async function loadMachine() {
+  try {
+    const r = await fetch('/api/machine');
+    if (!r.ok) throw new Error(r.status);
+    MACHINE = await r.json();
+    MACHINE_IS_REAL = true;
+  } catch (e) {
+    MACHINE = FALLBACK;
+    const b = document.getElementById('machine-banner');
+    if (b) {
+      b.style.display = '';
+      b.textContent = 'No printer capture: weight and overhang use generic defaults, not your machine. Serve this page from app.py with a project saved from Bambu Studio at profiles/default.3mf.';
+    }
+  }
+  setOverhang(MACHINE.overhang_deg);
+  applyBed();
+  const tag = document.getElementById('machine-name');
+  if (tag) tag.textContent = MACHINE.name;
+}
+
+// A budget the user sets, not a property of the printer. It was a hardcoded
+// 50 g left over from a library's rule; nothing here knows what yours is.
+function weightCap() {
+  const el = document.getElementById('opt-cap');
+  return Math.max(1, (el && +el.value) || 50);
+}
+
+function densityFor(slot) {
+  const f = MACHINE.filaments && MACHINE.filaments[slot];
+  return f ? f.density : DEFAULT_DENSITY;
+}
+
+// ---- scene setup ---------------------------------------------------------
+const container = document.getElementById('scene');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1e1e1e);
+
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 10000);
+camera.position.set(180, -180, 140);
+camera.up.set(0, 0, 1);
+
+const renderer = new THREE.WebGLRenderer({
+  antialias: true,
+  preserveDrawingBuffer: true,   // needed so toDataURL/snapshot gets pixels
+});
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.localClippingEnabled = true;  // for the slice plane
+container.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true; controls.dampingFactor = 0.08;
+controls.target.set(0, 0, 30);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+const key = new THREE.DirectionalLight(0xffffff, 0.85);
+key.position.set(120, 200, 200); scene.add(key);
+const fill = new THREE.DirectionalLight(0xffffff, 0.35);
+fill.position.set(-150, -100, 80); scene.add(fill);
+
+let grid = null;
+function applyBed() {
+  if (grid) { scene.remove(grid); grid.geometry.dispose(); }
+  const [bx] = MACHINE.bed_mm;
+  grid = new THREE.GridHelper(bx, Math.max(4, Math.round(bx / 10)), 0x555555, 0x333333);
+  grid.rotation.x = Math.PI / 2; scene.add(grid);
+  const label = document.getElementById('bed-label');
+  if (label) label.textContent = `Show build plate (${bx}mm)`;
+}
+applyBed();
+
+// ---- state ---------------------------------------------------------------
+const state = {
+  rawGeometry: null,   // un-rotated, un-centered geometry from the loader
+  filename: '',
+  upAxis: '+Z',
+  bestAxis: '+Z',
+  mesh: null,
+  wireMesh: null,
+  bboxHelper: null,
+  autoSpin: false,
+  lastStats: null,     // cached for snapshot overlay
+  modelHeight: 0,
+  parts: [],           // from a 3MF's model_settings.config: name, slot, tri range
+  lastFile: null,      // kept so Preflight can post the same bytes to the server
+};
+
+// Slice plane: clip away everything above sliceZ so we see a cross-section.
+// Plane normal (0,0,-1) + constant=sliceZ means distance(p) = -p.z + sliceZ,
+// so points with p.z > sliceZ are negative → clipped (Three.js convention).
+const slicePlane = new THREE.Plane(new THREE.Vector3(0, 0, -1), 0);
+
+// ---- file dispatch -------------------------------------------------------
+const stlLoader = new STLLoader();
+
+function loadFromFile(file) {
+  showProgress(`Loading ${file.name}…`);
+  const ext = file.name.toLowerCase().split('.').pop();
+  file.arrayBuffer().then((buf) => {
+    try {
+      let geom;
+      if (ext === 'stl')      geom = stlLoader.parse(buf);
+      else if (ext === '3mf') geom = parse3MF(buf);
+      else { hideProgress(); alert(`Unsupported file type: .${ext}`); return; }
+      state.rawGeometry = geom;
+      state.filename = file.name;
+      state.parts = geom.userData.parts || [];
+      state.lastFile = { name: file.name, buf };
+      renderParts();
+      state.upAxis = '+Z';
+      setActiveOrientButton('+Z');
+      rebuildScene();
+      scoreAllOrientations();
+      hideProgress();
+    } catch (e) {
+      hideProgress();
+      alert(`Failed to parse ${file.name}: ${e.message}`);
+      console.error(e);
+    }
+  });
+}
+
+// ---- 3MF parser ----------------------------------------------------------
+// 3MF is a zip; we want 3D/3dmodel.model — an XML file with vertices and triangles.
+// A 3mf can contain multiple <object>s with <mesh>; we merge them all.
+function parse3MF(arrayBuffer) {
+  const zipped = new Uint8Array(arrayBuffer);
+  const files = fflate.unzipSync(zipped);
+  // Find the model file. Spec: "3D/3dmodel.model"; some authors use different casing.
+  const key = Object.keys(files).find(k => /3d\/3dmodel\.model$/i.test(k))
+           || Object.keys(files).find(k => k.toLowerCase().endsWith('.model'));
+  if (!key) throw new Error('No 3dmodel.model inside 3mf');
+
+  // Metadata/model_settings.config is the half of the file a plain geometry
+  // viewer throws away, and on this repo's output it is the entire point: it
+  // says which filament slot each part prints in. Without it you are looking
+  // at a grey lump and cannot tell a two-colour plaque from a one-colour one.
+  // It is also Bambu-specific, which is exactly why PrusaSlicer opening one of
+  // these looks broken and isn't.
+  const slotByPart = {};
+  const nameByPart = {};
+  const cfgKey = Object.keys(files).find(k => /model_settings\.config$/i.test(k));
+  if (cfgKey) {
+    try {
+      const cfg = new DOMParser().parseFromString(
+        new TextDecoder('utf-8').decode(files[cfgKey]), 'application/xml');
+      for (const part of cfg.getElementsByTagName('part')) {
+        const id = part.getAttribute('id');
+        for (const m of part.getElementsByTagName('metadata')) {
+          if (m.getAttribute('key') === 'extruder') slotByPart[id] = +m.getAttribute('value');
+          if (m.getAttribute('key') === 'name') nameByPart[id] = m.getAttribute('value');
+        }
+      }
+    } catch (e) { /* geometry still loads; the panel just says "no slots" */ }
+  }
+  const xml = new TextDecoder('utf-8').decode(files[key]);
+  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  if (doc.querySelector('parsererror')) throw new Error('Invalid 3MF XML');
+
+  // 3MF puts everything in a namespace (xmlns="http://schemas.microsoft.com/...").
+  // querySelectorAll without a namespace prefix won't match, so use
+  // getElementsByTagNameNS with '*' to match any namespace.
+  const byTag = (root, name) => [...root.getElementsByTagNameNS('*', name)];
+  const meshes = byTag(doc, 'mesh');
+  if (meshes.length === 0) throw new Error('No <mesh> in 3MF');
+
+  const partOf = new Map();
+  for (const m of meshes) {
+    let node = m.parentNode;
+    while (node && node.localName !== 'object') node = node.parentNode;
+    partOf.set(m, node ? node.getAttribute('id') : null);
+  }
+
+  const geoms = meshes.map((m) => {
+    const verts = byTag(m, 'vertex');
+    const tris = byTag(m, 'triangle');
+    if (verts.length === 0 || tris.length === 0) return null;
+    const positions = new Float32Array(tris.length * 9);
+    const xs = verts.map(v => +v.getAttribute('x'));
+    const ys = verts.map(v => +v.getAttribute('y'));
+    const zs = verts.map(v => +v.getAttribute('z'));
+    for (let i = 0; i < tris.length; i++) {
+      const t = tris[i];
+      const v1 = +t.getAttribute('v1'), v2 = +t.getAttribute('v2'), v3 = +t.getAttribute('v3');
+      positions[i*9+0] = xs[v1]; positions[i*9+1] = ys[v1]; positions[i*9+2] = zs[v1];
+      positions[i*9+3] = xs[v2]; positions[i*9+4] = ys[v2]; positions[i*9+5] = zs[v2];
+      positions[i*9+6] = xs[v3]; positions[i*9+7] = ys[v3]; positions[i*9+8] = zs[v3];
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    return g;
+  }).filter(Boolean);
+
+  if (geoms.length === 0) throw new Error('No geometry in 3MF meshes');
+
+  // Track where each part's triangles land in the merged buffer, so the panel
+  // and the by-slot colouring can address them afterwards.
+  const parts = [];
+  let first = 0;
+  meshes.forEach((m, i) => {
+    const g = geoms[i];
+    if (!g) return;
+    const count = g.attributes.position.count / 3;
+    const id = partOf.get(m);
+    parts.push({ id, name: nameByPart[id] || `part ${id}`, slot: slotByPart[id] ?? null,
+                 firstTri: first, triCount: count });
+    first += count;
+  });
+  const merged = geoms.length === 1 ? geoms[0] : mergeGeometries(geoms, false);
+  merged.userData.parts = parts;
+  return merged;
+}
+
+// ---- prepare geometry: per-face data computed once -----------------------
+// Returns { geometry, overhangFlags, componentIds, numComponents, overhangArea, totalArea }
+// We compute everything per-face once so changing color mode is cheap (just
+// re-paint the color buffer without recomputing normals/areas/components).
+function partVolumes(geometry, parts) {
+  // Signed tetrahedron volume per triangle, summed within each part's range.
+  // Only meaningful because write_3mf emits closed, correctly oriented solids;
+  // an open shell gives a number that means nothing, which is why verify.py
+  // and not this panel is the authority on whether a part is a solid.
+  const pos = geometry.attributes.position.array;
+  for (const part of parts) {
+    let v = 0;
+    for (let t = part.firstTri; t < part.firstTri + part.triCount; t++) {
+      const i = t * 9;
+      const ax = pos[i],   ay = pos[i+1], az = pos[i+2];
+      const bx = pos[i+3], by = pos[i+4], bz = pos[i+5];
+      const cx = pos[i+6], cy = pos[i+7], cz = pos[i+8];
+      v += (ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx)) / 6;
+    }
+    part.volume_mm3 = Math.abs(v);
+  }
+  return parts;
+}
+
+function renderParts() {
+  const box = document.getElementById('parts-list');
+  if (!box) return;
+  if (!state.parts.length) {
+    box.innerHTML = '<div class="row"><span class="k">Parts</span><span class="v">—</span></div>';
+    return;
+  }
+  const named = state.parts.some(p => p.slot);
+  box.innerHTML = state.parts.map((p) => {
+    const f = MACHINE.filaments && MACHINE.filaments[p.slot];
+    const sw = f ? `<span class="sw" style="background:${f.colour}"></span>` : '';
+    const slot = p.slot ? `${sw}slot ${esc(p.slot)}` : 'no slot';
+    return `<div class="row"><span class="k">${esc(p.name)}</span><span class="v">${slot}</span></div>`;
+  }).join('') + (named ? '' :
+    '<div class="row"><span class="k"></span><span class="v">plain 3MF: no filament intent</span></div>');
+}
+
+function prepareGeometry(geometry) {
+  let g = geometry.index ? geometry.toNonIndexed() : geometry;
+  const pos = g.attributes.position.array;
+  const triCount = pos.length / 9;
+
+  const overhangFlags = new Uint8Array(triCount);
+  let overhangArea = 0, totalArea = 0;
+  const v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), v3 = new THREE.Vector3();
+  const e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), n = new THREE.Vector3();
+
+  for (let t = 0; t < triCount; t++) {
+    const i = t * 9;
+    v1.set(pos[i],   pos[i+1], pos[i+2]);
+    v2.set(pos[i+3], pos[i+4], pos[i+5]);
+    v3.set(pos[i+6], pos[i+7], pos[i+8]);
+    e1.subVectors(v2, v1); e2.subVectors(v3, v1);
+    n.crossVectors(e1, e2);
+    const area = n.length() * 0.5;
+    totalArea += area;
+    n.normalize();
+    if (n.z < OVERHANG_DOT) { overhangFlags[t] = 1; overhangArea += area; }
+  }
+
+  const { componentIds, numComponents } = computeComponents(g);
+  g.computeVertexNormals();
+
+  return { geometry: g, overhangFlags, componentIds, numComponents, overhangArea, totalArea };
+}
+
+// Connected components via union-find over shared vertices.
+// Two triangles are in the same component iff they share a vertex position
+// (we hash to 0.1 micron precision so floating-point near-misses still merge).
+function computeComponents(geometry) {
+  const pos = geometry.attributes.position.array;
+  const triCount = pos.length / 9;
+  const totalVerts = pos.length / 3;
+
+  // Hash each vertex coord triple to a canonical ID.
+  const vertMap = new Map();
+  const vertIds = new Int32Array(totalVerts);
+  let nextId = 0;
+  const r = (v) => Math.round(v * 10000);
+  for (let i = 0; i < totalVerts; i++) {
+    const key = `${r(pos[i*3])},${r(pos[i*3+1])},${r(pos[i*3+2])}`;
+    let id = vertMap.get(key);
+    if (id === undefined) { id = nextId++; vertMap.set(key, id); }
+    vertIds[i] = id;
+  }
+
+  // Union-find over canonical vertex IDs.
+  const parent = new Int32Array(nextId);
+  for (let i = 0; i < nextId; i++) parent[i] = i;
+  const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+  const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent[ra] = rb; };
+
+  for (let t = 0; t < triCount; t++) {
+    const a = vertIds[t*3], b = vertIds[t*3+1], c = vertIds[t*3+2];
+    union(a, b); union(b, c);
+  }
+
+  // Map each triangle to a small component index (0..numComponents-1).
+  const componentIds = new Int32Array(triCount);
+  const rootToId = new Map();
+  let numComponents = 0;
+  for (let t = 0; t < triCount; t++) {
+    const root = find(vertIds[t*3]);
+    let id = rootToId.get(root);
+    if (id === undefined) { id = numComponents++; rootToId.set(root, id); }
+    componentIds[t] = id;
+  }
+  return { componentIds, numComponents };
+}
+
+// Paint vertex colors based on mode. Cheap — just fills a Float32Array.
+function applyColors(faceData, mode) {
+  const { geometry, overhangFlags, componentIds, numComponents } = faceData;
+  const pos = geometry.attributes.position.array;
+  const triCount = pos.length / 9;
+  const colors = new Float32Array(pos.length);
+  const tmp = new THREE.Color();
+
+  const baseR = 1.0, baseG = 0.655, baseB = 0.149; // #ffa726
+  const ovhR = 0.937, ovhG = 0.325, ovhB = 0.314;  // #ef5350
+
+  for (let t = 0; t < triCount; t++) {
+    let r, g, b;
+    if (mode === 'overhang') {
+      if (overhangFlags[t]) { r = ovhR; g = ovhG; b = ovhB; }
+      else                  { r = baseR; g = baseG; b = baseB; }
+    } else if (mode === 'piece') {
+      // Spread components around the hue wheel. Use golden-ratio offset so
+      // adjacent component IDs end up visually distinct rather than similar.
+      const hue = (componentIds[t] * 0.61803398875) % 1.0;
+      tmp.setHSL(hue, 0.65, 0.55);
+      r = tmp.r; g = tmp.g; b = tmp.b;
+    } else {
+      r = baseR; g = baseG; b = baseB;
+    }
+    const i = t * 9;
+    for (let k = 0; k < 3; k++) {
+      colors[i + k*3]     = r;
+      colors[i + k*3 + 1] = g;
+      colors[i + k*3 + 2] = b;
+    }
+  }
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+}
+
+// ---- bed contact area (faces lying on Z=0 after centering) ---------------
+function bedContactArea(geometry, tol = 0.2) {
+  const pos = geometry.attributes.position.array;
+  const triCount = pos.length / 9;
+  let minZ = Infinity;
+  for (let i = 2; i < pos.length; i += 3) if (pos[i] < minZ) minZ = pos[i];
+  let area = 0;
+  const v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), v3 = new THREE.Vector3();
+  const e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), n = new THREE.Vector3();
+  for (let t = 0; t < triCount; t++) {
+    const i = t * 9;
+    if (pos[i+2] - minZ > tol || pos[i+5] - minZ > tol || pos[i+8] - minZ > tol) continue;
+    v1.set(pos[i],   pos[i+1], pos[i+2]);
+    v2.set(pos[i+3], pos[i+4], pos[i+5]);
+    v3.set(pos[i+6], pos[i+7], pos[i+8]);
+    e1.subVectors(v2, v1); e2.subVectors(v3, v1);
+    n.crossVectors(e1, e2);
+    area += n.length() * 0.5;
+  }
+  return area;
+}
+
+// ---- volume via signed tetrahedra ---------------------------------------
+function computeVolume(geometry) {
+  const pos = geometry.attributes.position.array;
+  const triCount = pos.length / 9;
+  let v = 0;
+  for (let t = 0; t < triCount; t++) {
+    const i = t * 9;
+    const ax = pos[i],   ay = pos[i+1], az = pos[i+2];
+    const bx = pos[i+3], by = pos[i+4], bz = pos[i+5];
+    const cx = pos[i+6], cy = pos[i+7], cz = pos[i+8];
+    v += (ax * (by * cz - bz * cy)
+        + ay * (bz * cx - bx * cz)
+        + az * (bx * cy - by * cx)) / 6;
+  }
+  return Math.abs(v);
+}
+
+// ---- orientation rotation -----------------------------------------------
+// Returns a rotation that maps the model's chosen axis to world +Z.
+function orientationMatrix(axis) {
+  const m = new THREE.Matrix4();
+  switch (axis) {
+    case '+Z': break;                                    // identity
+    case '-Z': m.makeRotationX(Math.PI); break;          // flip
+    case '+X': m.makeRotationY(-Math.PI / 2); break;     // +X → +Z
+    case '-X': m.makeRotationY( Math.PI / 2); break;     // -X → +Z
+    case '+Y': m.makeRotationX( Math.PI / 2); break;     // +Y → +Z
+    case '-Y': m.makeRotationX(-Math.PI / 2); break;     // -Y → +Z
+  }
+  return m;
+}
+
+// ---- main build ----------------------------------------------------------
+function clearScene() {
+  for (const m of [state.mesh, state.wireMesh, state.bboxHelper]) {
+    if (m) { scene.remove(m); m.geometry?.dispose?.(); m.material?.dispose?.(); }
+  }
+  state.mesh = state.wireMesh = state.bboxHelper = null;
+}
+
+function rebuildScene() {
+  if (!state.rawGeometry) return;
+  clearScene();
+
+  // Start from a clone so we never mutate the raw geometry.
+  let geom = state.rawGeometry.clone();
+  geom.applyMatrix4(orientationMatrix(state.upAxis));
+
+  // Center on build plate.
+  geom.computeBoundingBox();
+  const bb = geom.boundingBox;
+  const center = new THREE.Vector3(); bb.getCenter(center);
+  geom.translate(-center.x, -center.y, -bb.min.z);
+
+  // Prepare per-face data (overhangs + components) once.
+  if (state.parts.length) partVolumes(geom, state.parts);
+  const faceData = prepareGeometry(geom);
+  state.faceData = faceData;
+  const { geometry, overhangArea, totalArea, numComponents } = faceData;
+
+  // Apply current color mode.
+  const colorMode = document.getElementById('opt-color').value;
+  applyColors(faceData, colorMode);
+
+  const sliceOn = document.getElementById('opt-slice').checked;
+  const mat = new THREE.MeshStandardMaterial({
+    vertexColors: colorMode !== 'solid',
+    color: colorMode === 'solid' ? 0xffa726 : 0xffffff,
+    metalness: 0.05, roughness: 0.55, side: THREE.DoubleSide,
+    clippingPlanes: sliceOn ? [slicePlane] : [],
+    clipShadows: true,
+  });
+  state.mesh = new THREE.Mesh(geometry, mat);
+  scene.add(state.mesh);
+
+  const wireMat = new THREE.MeshBasicMaterial({
+    color: 0xffffff, wireframe: true, transparent: true, opacity: 0.12,
+    clippingPlanes: sliceOn ? [slicePlane] : [],
+  });
+  state.wireMesh = new THREE.Mesh(geometry, wireMat);
+  state.wireMesh.visible = document.getElementById('opt-wire').checked;
+  scene.add(state.wireMesh);
+
+  state.bboxHelper = new THREE.Box3Helper(new THREE.Box3().setFromObject(state.mesh), 0xffa726);
+  state.bboxHelper.visible = document.getElementById('opt-bbox').checked;
+  scene.add(state.bboxHelper);
+
+  // Camera fit
+  geometry.computeBoundingBox();
+  const size = new THREE.Vector3(); geometry.boundingBox.getSize(size);
+  state.modelHeight = size.z;
+  const maxDim = Math.max(size.x, size.y, size.z);
+  const dist = maxDim * 2.2;
+  camera.position.set(dist * 0.7, -dist * 0.9, dist * 0.7);
+  controls.target.set(0, 0, size.z / 2);
+  controls.update();
+
+  // Configure the slice slider range to the new model height.
+  const sliceInput = document.getElementById('slice-z');
+  sliceInput.min = 0; sliceInput.max = size.z.toFixed(2); sliceInput.step = (size.z / 200).toFixed(3);
+  // Keep the slice handle at half-height if it's currently outside the new range.
+  if (+sliceInput.value > size.z) sliceInput.value = (size.z / 2).toFixed(2);
+  updateSlicePlane();
+
+  // Update stats panel.
+  const tris = geometry.attributes.position.count / 3;
+  const vol_mm3 = computeVolume(geometry);
+  const contactArea = bedContactArea(geometry);
+  updateStats({ size, tris, vol_mm3, overhangArea, totalArea, contactArea, numComponents });
+
+  document.getElementById('empty').classList.add('hidden');
+}
+
+function updateSlicePlane() {
+  const z = +document.getElementById('slice-z').value;
+  slicePlane.constant = z;
+  document.getElementById('slice-label').textContent = `Z = ${z.toFixed(1)} mm of ${state.modelHeight.toFixed(1)} mm`;
+}
+
+function updateStats({ size, tris, vol_mm3, overhangArea, totalArea, contactArea, numComponents }) {
+  document.getElementById('stat-file').textContent = state.filename || '—';
+  document.getElementById('stat-tris').textContent = Math.round(tris).toLocaleString();
+  document.getElementById('stat-size').textContent =
+    `${size.x.toFixed(1)} × ${size.y.toFixed(1)} × ${size.z.toFixed(1)}`;
+  const vol_cm3 = vol_mm3 / 1000;
+  document.getElementById('stat-vol').textContent = `${vol_cm3.toFixed(1)} cm³`;
+
+  // Per-part density where the file says which slot each part uses, because
+  // PLA Matte is 1.32 against 1.26 for PLA Basic. One number for
+  // the whole model is only right when there is only one filament.
+  const parts = state.parts || [];
+  const solid_g = parts.length && parts.some(p => p.slot)
+    ? parts.reduce((g, p) => g + (p.volume_mm3 || 0) / 1000 * densityFor(p.slot), 0) || vol_cm3 * densityFor(1)
+    : vol_cm3 * densityFor(1);
+  // Solid x density is an UPPER BOUND, and it was measured as one: against the
+  // a name plaque's real 13.40 g slice it reads 15.17 g, +13%, the gap being the
+  // sparse infill in the core. The old "x 0.35 for 20% infill" line read 5.3 g
+  // for the same plate -- 60% UNDER the truth, because that multiplier was
+  // tuned on chunky parts and a plate is nearly all wall and solid skin.
+  const floor_g = solid_g * MACHINE.infill;
+  document.getElementById('stat-solid').textContent = `${solid_g.toFixed(1)} g`;
+  document.getElementById('stat-solid').title =
+    'Upper bound: solid volume x density. Measured +13% against a real slice.';
+  document.getElementById('stat-realistic').textContent = `${floor_g.toFixed(1)} g`;
+  document.getElementById('stat-realistic').title =
+    'Floor: the same volume at ' + Math.round(MACHINE.infill * 100) +
+    '% infill, ignoring walls and solid skin. The real number is between these two.';
+  const infillLabel = document.getElementById('label-infill');
+  if (infillLabel) infillLabel.textContent = `Floor at ${Math.round(MACHINE.infill * 100)}% infill`;
+  const realistic_g = solid_g;   // the cap is judged against the bound, not the floor
+
+  const WEIGHT_CAP_G = weightCap();
+  let cls, label;
+  if (realistic_g <= WEIGHT_CAP_G * 0.9)      { cls = 'good'; label = 'fits'; }
+  else if (realistic_g <= WEIGHT_CAP_G * 1.1) { cls = 'warn'; label = 'close'; }
+  else                                        { cls = 'bad';  label = 'over'; }
+  document.getElementById('stat-cap').innerHTML =
+    `<span class="weight-badge ${cls}">${realistic_g.toFixed(1)} g · ${label}</span>`;
+
+  const scaleRow = document.getElementById('row-scale');
+  if (realistic_g > WEIGHT_CAP_G) {
+    const linear = Math.cbrt(WEIGHT_CAP_G / realistic_g);
+    document.getElementById('stat-scale').textContent = `${(linear * 100).toFixed(1)}%`;
+    scaleRow.style.display = '';
+  } else {
+    scaleRow.style.display = 'none';
+  }
+
+  const overhangPct = totalArea > 0 ? (overhangArea / totalArea * 100) : 0;
+  document.getElementById('stat-overhang').textContent =
+    `${overhangPct.toFixed(1)}% (${overhangArea.toFixed(0)} mm²)`;
+  document.getElementById('stat-contact').textContent =
+    `${contactArea.toFixed(0)} mm²${contactArea < STABLE_CONTACT_MM2 ? ' ⚠ unstable' : ''}`;
+  document.getElementById('stat-pieces').textContent =
+    numComponents === 1 ? '1 (single solid)' : `${numComponents} disjoint`;
+
+  // Cache for the snapshot overlay.
+  state.lastStats = {
+    filename: state.filename,
+    tris: Math.round(tris),
+    size: `${size.x.toFixed(1)} × ${size.y.toFixed(1)} × ${size.z.toFixed(1)} mm`,
+    realistic_g, solid_g, overhangPct, contactArea, numComponents,
+    upAxis: state.upAxis,
+  };
+}
+
+// ---- score all 6 orientations & mark best -------------------------------
+function scoreAllOrientations() {
+  if (!state.rawGeometry) return;
+  let best = null, bestScore = -Infinity;
+  for (const axis of ['+X','-X','+Y','-Y','+Z','-Z']) {
+    const g = state.rawGeometry.clone();
+    g.applyMatrix4(orientationMatrix(axis));
+    g.computeBoundingBox();
+    const bb = g.boundingBox;
+    const center = new THREE.Vector3(); bb.getCenter(center);
+    g.translate(-center.x, -center.y, -bb.min.z);
+    // Lightweight score: don't run union-find here, only overhang + contact.
+    const fd = scoreOnly(g);
+    const overhangFrac = fd.totalArea > 0 ? fd.overhangArea / fd.totalArea : 0;
+    const contact = bedContactArea(g);
+    const contactFrac = fd.totalArea > 0 ? contact / fd.totalArea : 0;
+    const stable = contact >= STABLE_CONTACT_MM2;
+    const score = stable ? (2 * contactFrac + (1 - overhangFrac)) : 0.01 * (1 - overhangFrac);
+    if (score > bestScore) { bestScore = score; best = axis; }
+  }
+  state.bestAxis = best;
+  document.querySelectorAll('#orient-grid button').forEach((btn) => {
+    btn.classList.toggle('best', btn.dataset.axis === best);
+  });
+  document.getElementById('best-tag').textContent = `best: ${best}`;
+}
+
+// Lightweight scorer used inside scoreAllOrientations: just overhang+totalArea.
+// Avoids the full prepareGeometry cost (union-find) for 6 candidate rotations.
+function scoreOnly(geometry) {
+  let g = geometry.index ? geometry.toNonIndexed() : geometry;
+  const pos = g.attributes.position.array;
+  const triCount = pos.length / 9;
+  let overhangArea = 0, totalArea = 0;
+  const v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), v3 = new THREE.Vector3();
+  const e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), n = new THREE.Vector3();
+  for (let t = 0; t < triCount; t++) {
+    const i = t * 9;
+    v1.set(pos[i], pos[i+1], pos[i+2]);
+    v2.set(pos[i+3], pos[i+4], pos[i+5]);
+    v3.set(pos[i+6], pos[i+7], pos[i+8]);
+    e1.subVectors(v2, v1); e2.subVectors(v3, v1);
+    n.crossVectors(e1, e2);
+    const area = n.length() * 0.5;
+    totalArea += area;
+    n.normalize();
+    if (n.z < OVERHANG_DOT) overhangArea += area;
+  }
+  return { overhangArea, totalArea };
+}
+
+function setActiveOrientButton(axis) {
+  document.querySelectorAll('#orient-grid button').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.axis === axis);
+  });
+}
+
+// ---- inputs --------------------------------------------------------------
+document.getElementById('file-input').addEventListener('change', (e) => {
+  const f = e.target.files[0]; if (f) loadFromFile(f);
+});
+const overlay = document.getElementById('drop-overlay');
+window.addEventListener('dragover', (e) => { e.preventDefault(); overlay.classList.add('active'); });
+window.addEventListener('dragleave', (e) => { if (e.target === document.documentElement) overlay.classList.remove('active'); });
+window.addEventListener('drop', (e) => {
+  e.preventDefault(); overlay.classList.remove('active');
+  const f = e.dataTransfer.files[0]; if (f) loadFromFile(f);
+});
+
+document.querySelectorAll('#orient-grid button').forEach((btn) => {
+  btn.addEventListener('click', () => {
+    state.upAxis = btn.dataset.axis;
+    setActiveOrientButton(state.upAxis);
+    rebuildScene();
+  });
+});
+
+document.getElementById('btn-auto-orient').addEventListener('click', () => {
+  if (!state.rawGeometry) return;
+  state.upAxis = state.bestAxis;
+  setActiveOrientButton(state.upAxis);
+  rebuildScene();
+});
+
+// Color mode: rebuild just to recolor (cheap because faceData is cached, but
+// we go through rebuild for material side-effects like vertexColors on/off).
+document.getElementById('opt-color').addEventListener('change', () => {
+  const mode = document.getElementById('opt-color').value;
+  document.getElementById('legend-overhang').style.display = mode === 'overhang' ? '' : 'none';
+  rebuildScene();
+});
+
+// Slice plane controls
+document.getElementById('opt-slice').addEventListener('change', (e) => {
+  document.getElementById('slice-controls').style.display = e.target.checked ? '' : 'none';
+  rebuildScene(); // toggle the clippingPlanes on the materials
+});
+document.getElementById('slice-z').addEventListener('input', updateSlicePlane);
+
+document.getElementById('opt-wire').addEventListener('change', (e) => { if (state.wireMesh) state.wireMesh.visible = e.target.checked; });
+document.getElementById('opt-bbox').addEventListener('change', (e) => { if (state.bboxHelper) state.bboxHelper.visible = e.target.checked; });
+document.getElementById('opt-grid').addEventListener('change', (e) => { grid.visible = e.target.checked; });
+document.getElementById('opt-spin').addEventListener('change', (e) => { state.autoSpin = e.target.checked; });
+
+// Snapshot: composite the WebGL canvas with a stats overlay drawn on top,
+// then download as PNG. preserveDrawingBuffer on the renderer makes this safe.
+document.getElementById('btn-snapshot').addEventListener('click', () => {
+  if (!state.lastStats) { alert('Load a model first.'); return; }
+  renderer.render(scene, camera); // ensure the buffer is fresh
+  const src = renderer.domElement;
+  const w = src.width, h = src.height;
+  const out = document.createElement('canvas');
+  out.width = w; out.height = h;
+  const ctx = out.getContext('2d');
+  ctx.drawImage(src, 0, 0);
+
+  // Stats overlay in the bottom-right corner.
+  const s = state.lastStats;
+  const lines = [
+    s.filename,
+    `${s.tris.toLocaleString()} triangles · ${s.size}`,
+    `${s.realistic_g.toFixed(1)} g solid, upper bound (${s.realistic_g <= weightCap() ? 'fits' : 'over'} ${weightCap()} g budget)`,
+    `Overhang area: ${s.overhangPct.toFixed(1)}% · Bed contact: ${s.contactArea.toFixed(0)} mm²`,
+    `Pieces: ${s.numComponents === 1 ? '1 solid' : s.numComponents + ' disjoint'} · Orientation: ${s.upAxis} up`,
+  ];
+  const scale = Math.max(1, w / 1280); // scale text with canvas resolution
+  const fontPx = Math.round(14 * scale);
+  const padding = Math.round(14 * scale);
+  const lineH = Math.round(20 * scale);
+  ctx.font = `${fontPx}px -apple-system, BlinkMacSystemFont, system-ui, sans-serif`;
+  let maxLineW = 0;
+  for (const ln of lines) maxLineW = Math.max(maxLineW, ctx.measureText(ln).width);
+  const boxW = Math.round(maxLineW + padding * 2);
+  const boxH = lines.length * lineH + padding * 2;
+  const x = w - boxW - Math.round(16 * scale);
+  const y = h - boxH - Math.round(16 * scale);
+  ctx.fillStyle = 'rgba(0,0,0,0.72)';
+  ctx.fillRect(x, y, boxW, boxH);
+  ctx.fillStyle = '#ffffff';
+  ctx.textBaseline = 'top';
+  for (let i = 0; i < lines.length; i++) {
+    if (i === 0) ctx.fillStyle = '#ffa726';
+    else if (i === 2) ctx.fillStyle = s.realistic_g <= weightCap() ? '#66bb6a' : '#ef5350';
+    else ctx.fillStyle = '#e8e8e8';
+    ctx.fillText(lines[i], x + padding, y + padding + i * lineH);
+  }
+
+  out.toBlob((blob) => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = (s.filename || 'model').replace(/\.[^.]+$/, '') + '_preview.png';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  }, 'image/png');
+});
+
+function showProgress(msg) { const p = document.getElementById('progress'); p.textContent = msg; p.classList.add('active'); }
+function hideProgress() { document.getElementById('progress').classList.remove('active'); }
+
+// ---- render loop ---------------------------------------------------------
+function resize() {
+  const w = container.clientWidth, h = container.clientHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize); resize();
+
+function tick() {
+  if (state.autoSpin && state.mesh) state.mesh.rotation.z += 0.005;
+  controls.update();
+  renderer.render(scene, camera);
+  requestAnimationFrame(tick);
+}
+tick();
+
+// ---- preflight -----------------------------------------------------------
+// The browser can read geometry; it cannot tell you two colours are a hairline
+// apart or that a part boundary is off the layer grid. That is cross_check and
+// inspect_3mf, so it stays on the server and this button asks it.
+const preflightBtn = document.getElementById('btn-preflight');
+const preflightOut = document.getElementById('preflight-out');
+if (preflightBtn) preflightBtn.addEventListener('click', async () => {
+  if (!state.lastFile) { preflightOut.textContent = 'Load a .3mf first.'; return; }
+  if (!state.lastFile.name.toLowerCase().endsWith('.3mf')) {
+    preflightOut.textContent = 'An STL carries no part or slot metadata; preflight reads .3mf.';
+    return;
+  }
+  preflightOut.textContent = 'Checking…';
+  try {
+    let bin = '';
+    const bytes = new Uint8Array(state.lastFile.buf);
+    for (let i = 0; i < bytes.length; i += 0x8000)
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    const res = await fetch('/api/inspect', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: state.lastFile.name, file: btoa(bin) }),
+    });
+    const body = await res.json();
+    if (!res.ok) { preflightOut.textContent = 'Preflight failed: ' + (body.error || res.status); return; }
+    const r = body.report;
+    const bands = (r.bands || []).map(b =>
+      `z=${b.z_mm}: overlap ${b.overlap_mm2} mm², seam gaps ${b.seam_gap_mm2} mm²`).join('<br>');
+    preflightOut.innerHTML = r.valid
+      ? `<span style="color:var(--good)">valid</span><br>${bands || 'single-part bands, nothing to cross-check'}`
+      : `<span style="color:var(--bad)">invalid</span><br>${r.errors.map(esc).join('<br>')}`;
+  } catch (e) {
+    preflightOut.textContent = 'Preflight needs app.py: ' + e.message;
+  }
+});
+
+loadMachine().then(() => { renderParts(); });
+</script>
+</body>
+</html>

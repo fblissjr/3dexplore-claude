@@ -1,0 +1,78 @@
+[project]
+name = "3dexplore-claude"
+version = "0.3.0"
+description = "Text, images, drawings and scans to native Bambu Studio 3MF projects with per-part filament slots"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "fblissjr" }]
+keywords = ["3d-printing", "bambu-lab", "bambu-studio", "3mf", "ams", "multicolor"]
+# 3.9 and 3.10 are past end of life, and holding the floor there drags the
+# whole lock backwards to whatever still ships wheels for them. Nothing here
+# needs it.
+requires-python = ">=3.11"
+
+# Loose pins on purpose: the harness only uses these libraries' oldest,
+# dullest corners, and the geometry stack churns fast at the edges. uv.lock is
+# what makes a run reproducible, so the ranges here stay honest about what the
+# code actually requires rather than doubling as a pinning mechanism.
+dependencies = [
+    "trimesh>=4.0",
+    # trimesh's optional graph stack, which section() in validation.py needs to
+    # walk a cut into closed loops. Not optional for us, and it fails in the
+    # nastiest way: trimesh imports fine and raises ModuleNotFoundError from
+    # inside the call. Both went undeclared until uv.lock built a clean
+    # environment -- every machine this was written on already had scipy from
+    # something else. `trimesh[easy]` is the blunt alternative and costs 21
+    # more packages; name them here while the list stays this short.
+    "scipy>=1.10",
+    "networkx>=3.0",
+    # Same story, third member: Path2D.polygons_full (used by scan2print.py to
+    # turn a layer section into shapely polygons with holes) builds an rtree
+    # to nest the loops. Found the same way -- the machine it was written on
+    # had rtree from something else.
+    "rtree>=1.0",
+    "manifold3d>=2.3",        # trimesh's boolean/extrusion backend
+    "mapbox_earcut>=1.0",     # polygon triangulation for extrude_polygon
+    "shapely>=2.0",
+    "opencv-python-headless>=4.8",
+    "pillow>=10.0",           # glyph rasterisation
+    "matplotlib>=3.7",        # preview png only
+]
+
+# Optional independent 3MF core conformance check (no wheel on every arch).
+# svg: rasterising SVG input for art2plate. Kept optional because it pulls
+# cairo; render_svg() says to pass a PNG instead when it is missing.
+[project.optional-dependencies]
+verify = ["lib3mf"]
+svg = ["cairosvg>=2.7"]
+
+# `uv sync` installs this by default, so a fresh clone can run the tests and
+# every worked example in the README. lib3mf deliberately stays out: it has no
+# wheel on every arch (no linux-aarch64, for one), so putting it here would
+# make a plain `uv sync` fail on machines where the rest works fine. verify.py
+# skips that check when it is absent -- `uv sync --extra verify` opts in.
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "cairosvg>=2.7",
+]
+
+[project.urls]
+Repository = "https://github.com/fblissjr/3dexplore-claude"
+Issues = "https://github.com/fblissjr/3dexplore-claude/issues"
+
+[build-system]
+requires = ["setuptools>=77"]  # PEP 639 license metadata
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["x2d"]
+
+[tool.pytest.ini_options]
+# app.py sits at the repo root, not inside the x2d package, and test_upload.py
+# imports it. `python -m unittest discover` got the root on sys.path for free
+# from the cwd; pytest running against an installed package does not, so say so
+# rather than leaving two tests that only pass when invoked the old way.
+pythonpath = ["."]
+testpaths = ["tests"]
