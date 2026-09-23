@@ -27,6 +27,11 @@ anything; most of it was expensive to learn.
 - **Remove what the nozzle cannot print in the raster, before tracing.**
   `ink_art()` and `shaded.flatten()` both do; growing or shrinking polygons
   after `separate()` reopens the seams it closed.
+- **Someone else's project is edited in place, never rebuilt.** Patch it
+  through `x2d/archive.py`, which rewrites only what you change; fix meshes
+  with `x2d/repair.py`, never a global mesh fixer, which renumbers triangles
+  and throws the painting away. `paint_color` strings are trees: change them
+  with `x2d/paint.py`, not a string replace.
 
 ## Conventions
 
@@ -48,6 +53,9 @@ anything; most of it was expensive to learn.
 - When you change a script, give it a test (`tests/test_scripts.py` has the
   harness); scripts are where bugs have escaped. `review_layers` and
   `slice_local` are tested only up to the Bambu Studio call; `compare_slices`
-  and `make_sample` have no tests yet.
+  has no test yet.
+- A procedure someone will repeat becomes a skill in
+  `.claude/skills/<name>/SKILL.md`: what to do, in order, pointing at
+  `docs/DESIGN.md` for why. Track each skill folder in `.gitignore`.
 
 @docs/DESIGN.md

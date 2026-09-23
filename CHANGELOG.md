@@ -2,6 +2,35 @@
 
 All notable changes to this project. Versions follow semver.
 
+## Unreleased
+
+Projects someone else made, from a MakerWorld download that Bambu Studio
+flagged with 273 open and 34 non-manifold edges.
+
+- `scripts/repair_3mf.py` and `x2d/repair.py`: local mesh repair that cuts
+  out only the damage and refills it from the surface it replaced, keeping
+  every other triangle, its order and its paint. Objects that were fine, and
+  the rest of the archive, are copied byte for byte.
+- `scripts/reslot_3mf.py` and `x2d/reslot.py`: move a project's filaments to
+  the slots your AMS has them in -- per-filament settings, the purge matrix,
+  part filaments and painted triangles together. Keys it cannot place are
+  reported, not guessed.
+- `scripts/overhangs.py` and `x2d/overhang.py`: explain a "floating
+  cantilever" warning -- floating islands, bridges and cantilevers on the
+  project's own layer grid, with how far each reaches.
+- `x2d/archive.py`: read and patch a GUI-saved project (meshes in
+  `3D/Objects/`, components, per-triangle attributes) without reformatting
+  it. `x2d/paint.py`: parse and remap `paint_color` strings.
+- `.claude/skills/fix-downloaded-3mf`: the whole workflow, including what the
+  X2D GUI does with a four-colour download.
+
+Also:
+
+- `scripts/bowtie.py`: a glue-on bowtie in several sizes, to choose the fit
+  against the real print before gluing.
+- Removed `docs/AGENT_WORKFLOW.md`; what still held is in `docs/DESIGN.md`,
+  "Direction". Removed `scripts/make_sample.py`, which nothing used.
+
 ## 0.3.0
 
 First public release, as 3dexplore-claude.

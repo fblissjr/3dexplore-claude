@@ -35,7 +35,8 @@ def project_settings(ref_3mf, *, pin=None, support_interface=None,
     pin: {filament_slot: nozzle}, both 1-based, as the UI numbers them. Setting
     it switches filament_map_mode to "Manual", which is the only mode where the
     file's mapping wins. Leave it None and the slicer groups filaments itself --
-    which, with a single AMS on the main nozzle, means everything on nozzle 1.
+    usually onto the nozzle the AMS feeds, but not reliably: the GUI has put a
+    one-filament project on an empty auxiliary nozzle. Pin when it matters.
 
     colors: {filament_slot: "#RRGGBB"} for a slot whose spool changed since the
     capture. This keeps the preview and Bambu Studio's filament panel honest

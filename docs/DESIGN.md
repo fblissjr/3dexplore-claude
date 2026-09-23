@@ -31,8 +31,14 @@ x2d/validation.py archive preflight and cross_check between parts
 x2d/report.py     one report shape for every generator
 x2d/preview.py    flat PNG sanity check
 x2d/fonts.py      cross-platform bold font lookup
+x2d/archive.py    read and patch a project Bambu Studio saved, byte-preserving
+x2d/paint.py      paint_color strings: parse, remap, whole-triangle codes
+x2d/repair.py     local mesh repair that keeps every other triangle and its paint
+x2d/reslot.py     move a project's filaments to other slots, paint included
+x2d/overhang.py   floating islands, bridges and cantilevers on the layer grid
 app.py, web/      local upload workbench and model viewer
-scripts/          CLI generators, preflight, local slicing
+scripts/          CLI generators, preflight, local slicing, fixes for downloaded projects
+.claude/skills/  workflows for Claude Code and Cowork, one folder per skill
 profiles/         your printer captures; gitignored, see profiles/README.md
 samples/          input images for the worked examples; committed, they are inputs
 out/              generated, gitignored
@@ -78,8 +84,14 @@ decides that at slice time, in a step it calls *filament grouping*
 Auto mode hands the decision back to the slicer.
 
 On the machine this was built against — one 4-slot AMS on the main nozzle,
-nothing on the auxiliary — grouping puts *every* slot on nozzle 1 and builds a
-prime tower. Any claim that this project gets "two colors with no purge tower"
+nothing on the auxiliary — grouping has put *every* slot on nozzle 1 and built
+a prime tower. That is what was seen on the two-colour plates, not a rule: the
+same machine's GUI, in `Auto For Flush`, put a one-filament project (slot 3,
+`filament_map` all `"1"` in the file) on the **auxiliary** nozzle, which has
+nothing loaded, and asked for the spool to be moved to match. So it is not
+only the headless CLI that does this (see "The CLI slices for the wrong
+nozzle"). An Auto mode is a request for the slicer's opinion; if the nozzle
+matters, `pin=` it. Any claim that this project gets "two colors with no purge tower"
 is wrong; an earlier README said exactly that and it had to be retracted.
 
 It matters less than it sounds when the artwork occupies its own layer band
@@ -188,6 +200,37 @@ variant expansion, the device's AMS and nozzle state. So the only capture is a
 project saved from Bambu Studio. Nothing in this repo can tell a flattened CLI
 config from a real one by its machine keys, which is exactly why not to build on
 one.
+
+### A patched process key must also be listed as patched
+
+`project_settings.config` carries `different_settings_to_system`: one string
+per preset (entry 0 is the process, then one per filament, then the machine),
+each a `;`-joined, sorted list of the keys that differ from the named system
+preset. A project saved with supports on has `enable_support` in entry 0.
+
+The working assumption, from how the GUI behaves: on load Bambu Studio starts
+from the system preset named in `print_settings_id` and re-applies the keys
+listed there. So a value patched into a capture without being added to the list
+is in the file and may be ignored. `patch_process()` in `scripts/bowtie.py`
+sets the key and lists it, never delists (a listed key that equals the system
+default is harmless; a delisted key that does not is the bug), and refuses a
+key the capture does not have, so a typo cannot become a new setting.
+
+What was seen, Bambu Studio 02.08.02.61 GUI, one project: `brim_type`
+`no_brim` and `ironing_type` `top`, both patched *and* listed, opened as
+"No-brim" and "Top surfaces", each marked orange with a revert arrow (the
+GUI's mark for "differs from the preset"). `enable_support` patched back to
+the system default `0` opened unticked and unmarked. `pin=`
+(`filament_map_mode` `Manual`) opened with "Custom Mode" selected in the
+grouping menu beside Slice plate -- the GUI's name for Manual. Which nozzle
+the slot landed on was not seen.
+
+What was not tried: the same patch *without* the listing. So "unlisted keys
+are ignored" is still an inference, not an observation; only "listed keys are
+applied" is proven. If that experiment is ever run, record the result here.
+
+This belongs in `x2d/project.py` beside `pin=` and `colors=` once a second
+script needs it; one caller is not yet a pattern.
 
 ## Supports
 
@@ -315,6 +358,9 @@ From driving the GUI through computer use (Claude Cowork, in this case).
 - **Git in an agent's connected folder needs delete permission**, or `git` cannot
   unlink its own `.lock` files and every commit poisons the next one. Request
   it once, up front.
+  Reading needs none: `git --no-optional-locks status` (and `diff`, `log`)
+  never writes the index, where plain `git status` refreshes it and can
+  leave `.git/index.lock` behind.
 - The app's UI is custom-drawn. Radio buttons in its dialogs often will not
   toggle via background clicks. Don't burn turns on it.
 
@@ -367,10 +413,27 @@ nonmutation, placement and invalid inputs.
 
 ## Direction
 
-The next step is an agent-assisted modeling workflow; see
-[`AGENT_WORKFLOW.md`](AGENT_WORKFLOW.md). The current mosaic app is a
-prototype, not completion of the image-to-3D objective. Keep future
-capabilities separate from verified behavior.
+The agent is Claude, in Claude Code or Cowork, running these scripts. There
+is no separate worker or job queue. A capability arrives as a module with
+tests and a script; once it is a procedure someone repeats, it also gets a
+skill in `.claude/skills/` that says what to do and points here for why.
+`fix-downloaded-3mf` is the first.
+
+What still holds for turning pictures into objects, from the plan this
+replaced (`docs/AGENT_WORKFLOW.md`: its bun milestone is done, and skills took
+the place of the worker it proposed):
+
+- **Label what was inferred.** A single photograph cannot establish hidden
+  surfaces or scale. A procedural interpretation says it is one.
+- **Judge shape untextured.** Texture shadows are not folds, and surface
+  colour is not filament mapping: get a single-colour export right before
+  turning colour into AMS regions.
+- **Nothing an upload brings is run.** Credentials, paid services and remote
+  GPUs stay out of the repo; using one needs a configured destination and a
+  budget.
+- The upload workbench (`app.py`, mosaics) is a prototype, not the
+  image-to-3D objective. Keep future capabilities separate from verified
+  behaviour.
 
 ## Local slicing and layer review
 
@@ -954,3 +1017,189 @@ reason the CLIs are.
 every `getElementById` has a matching element, there is no top-level
 use-before-declaration, and all four endpoints answer correctly over HTTP. The
 rendering itself wants one human look.
+
+## Someone else's project: `archive.py`, `paint.py`, `repair.py`, `reslot.py`, `overhang.py`
+
+Everything above makes projects. This is for the other direction: a
+four-colour flexi figure downloaded from MakerWorld (the catbus), which Bambu
+Studio flagged with **273 open edges and 34 non-manifold edges**, whose eyes
+were painted a colour the owner did not want, and whose filament slots
+matched its designer's AMS rather than the one it was printing on. The work
+was done by hand once; these modules are what it left.
+
+The rule that shapes all five: **a downloaded project is edited, never
+rebuilt.** Its value is the designer's painting, part layout and tuned
+settings, and anything that round-trips the file through a general tool
+loses some of it.
+
+### Read without reformatting: `x2d/archive.py`
+
+A GUI-saved project keeps meshes in `3D/Objects/*.model`, referenced by
+component from an assembly in `3D/3dmodel.model`; `inspect_3mf` only reads
+our inline shape. `archive.py` parses the raw text with regular expressions
+and keeps each triangle's extra attributes as verbatim text, so
+`replace_mesh` rewrites one object and nothing else: replacing the catbus
+head with itself reproduced the 92 MB model file byte for byte. `rewrite`
+copies the archive entry by entry. Part ids in `model_settings.config` are
+component object ids *per object*, so `parts()` keys them by
+`(object id, part id)`.
+
+### Paint strings are trees: `x2d/paint.py`
+
+`paint_color="0C"` is one triangle's TriangleSelector tree, not a slot
+number. Hex nibbles read from the end, bits least-significant first; a node
+is 2 bits of split count, a leaf 2 bits of state (3 means "4 more bits,
+3 + n"), a split node 2 bits of special side and then its children. Whole
+triangles are `4`, `8`, `0C`, `1C`, `2C` for slots 1-5; state 0 is
+"unpainted", i.e. the part's own filament. The file had 80,080 painted
+triangles and 1147 distinct strings; every one parses with only zero padding
+left over and re-encodes to itself.
+
+Two ways to corrupt one silently: a string replace (`8` is also a nibble
+inside longer trees), and dropping a leading zero (`0C` is slot 3, `C` is a
+truncated tree). `remap()` rewrites leaf states in place; a state crossing 3
+changes width and the string grows or shrinks.
+
+### Repair is surgery: `x2d/repair.py`, `scripts/repair_3mf.py`
+
+The general tools are wrong for this. On the 127k-triangle head, pymeshfix
+removed 43k triangles and 5% of the volume (it resolves self-intersections,
+which a sculpt has on purpose), and MeshLab's repair filters flipped about
+1200. Both renumber triangles, which is the paint gone.
+
+All the damage was inside about a square millimetre of the head's flat base:
+a tangle of micro-triangles plus a few one-triangle holes. `repair()` cuts a
+ball around every defective triangle, grows it until what remains has clean
+simple holes (0.55 mm here), and refills each hole as a height field in the
+plane of its loop: the outline triangulated with no new outline vertex, a
+staggered grid of interior points woven in by constrained-Delaunay flips,
+and each point's height ray-cast from the surface that was cut out. Result:
+watertight, volume 6186.016 -> 6186.003 mm3, the patch within 0.037 mm of
+the old skin (0.0009 mean), and all 80,080 painted triangles kept. The first
+fill split ear-clipped triangles at their centroids instead; the flat base
+had left 7 mm outline edges, the slivers along them cut the corner off the
+curved rim, and the patch sat 0.24 mm off. Two limits worth knowing: a hole
+that wraps a sharp edge comes back chamfered, and painted triangles inside
+the cut come back unpainted (`painted_triangles_cut` reports how many; zero
+here).
+
+Count defects on **exact vertex indices**. Merging coincident vertices first
+reported non-manifold edges in 13 of the other 34 parts, wherever two shells
+of one part touch; Bambu Studio's count matched the unmerged one exactly
+(273/34, all in one part).
+
+### Re-slotting is three edits: `x2d/reslot.py`, `scripts/reslot_3mf.py`
+
+Matching a project to the AMS means moving each filament's settings, each
+part's `extruder`, and every paint leaf together. In a 02.08.02.61 X2D
+project the per-filament arrays come in blocks: 1 value (97 keys), 2
+(`flush_volumes_vector`, `filament_dev_ams_drying_ams_limitations`), 4 (AMS
+drying) and 6, one per extruder variant (43 keys; `filament_self_index` says
+which filament each entry belongs to, and is regenerated rather than moved).
+`flush_volumes_matrix` is nozzles x n x n, row = from, column = to, permuted
+on both axes. `different_settings_to_system` is `[process, filaments...,
+machine]`.
+
+Which keys are per-filament is not decidable by length: with four filaments,
+`printable_area` has four entries too. `FILAMENT_KEYS` is the list-valued
+keys of Bambu's public `fdm_filament_common.json` plus the ones the GUI save
+carries that the public profile lags on; any other `filament_*` counts;
+anything left whose length is a multiple of the filament count is reported
+as `left_as_is`, never guessed at.
+
+`--order` (which old filament each new slot takes its settings from) and
+`--map` (where each old filament's model goes) are separate on purpose. The
+file had a fifth, unused black and the eyes on a fourth; the AMS had one
+black. `--order 5 1 3 2 --map 4=1` keeps the black whose purge row was
+measured for black. The hand-built file and the script's output have
+identical settings and identical paint; only the plate's nozzle map differs,
+which had been set to all-main by hand and the script reorders instead.
+
+### Recolouring a painted feature
+
+The eyes were brown bulges with a slit pupil outlined by subdivided
+triangles. Connected components of solid paint (whole-triangle codes), with
+subdivided triangles as borders, split each eye into eyeball (the largest
+component), ring and pupil interior (enclosed). Eyeball to `solid(3)`
+(white), ring and pupil to one slot for black. Finding the feature is
+geometry (area, centroid, mean normal of each component); changing it is one
+`solid()` per triangle. No script yet: one case is not a pattern.
+
+### "Floating cantilever": `x2d/overhang.py`, `scripts/overhangs.py`
+
+With supports off, Bambu Studio said "Assembly has floating cantilever" and
+sliced fine. `overhangs.py` slices every part on the project's own grid
+(0.2 mm, then 0.12 mm) and classifies what has nothing under it: floating
+islands, bridges (held on two or more sides) and cantilevers (one side), with
+how far each reaches. The catbus: one 0.01 mm2 floating speck, bridges up to
+5.6 mm from their walls (the roof and floor inside the hollow body) and
+cantilevers of at most 2.2 mm. The original and repaired files gave the same
+report, and the head's slices differ by 0.015 mm2 in the first layer only, so
+the warning was the design's, not the repair's. Supports would have been
+trapped inside the body and could have fused the flexi joints.
+
+### What the X2D GUI did with it (02.08.02.61, one project, observed)
+
+- **Filament-Saving grouping put yellow, the body colour, on the auxiliary
+  nozzle** with nothing loaded there, and asked for it to be placed. It
+  reported 56-57 g of filament and 172 purges saved against one nozzle, on a
+  68.95 g, 6h38m plate. Moving the yellow spool to the auxiliary nozzle as an
+  external spool was the choice made, and **the print failed: yellow smeared
+  across the model and landed in random spots.** The file sent was the one
+  delivered (same geometry, paint and settings; only the synced colours
+  differ) and its grouping was `filament_maps` `1 2 1 1`, yellow alone on
+  the auxiliary. Cause not yet isolated; the suspects are the auxiliary
+  nozzle's first real use (offset and flow never calibrated, old filament
+  purged from it just before) and ooze from whichever nozzle sits idle.
+  Until a reprint with everything on the main nozzle (Custom grouping)
+  rules the auxiliary in or out, do not route a body colour to it. Same lesson as
+  "The one thing to get right", from the GUI this time.
+- **The plate keeps its own nozzle map.** In the printed file,
+  `project_settings.config` still said `filament_map` all `"1"`; the
+  grouping the GUI actually used (yellow on the auxiliary) was saved only on
+  the plate in `model_settings.config`: `filament_map_mode` `Auto For Flush`,
+  `filament_maps` `1 2 1 1`. So reading the project settings alone says the
+  wrong thing. The reprint file sets `Manual` and all `1` in both places;
+  whether the GUI keeps that through Sync info is not yet seen.
+- **"Switch diameter" after Sync info**, offering "Main nozzle: mm" (blank)
+  or "Auxiliary nozzle: 0.4mm". Both nozzles were 0.4 mm; the blank came from
+  syncing while the auxiliary nozzle was still loading. Either button makes
+  the print single-nozzle. Close it, sync again when the printer is idle.
+- **The AMS sync dialog maps by the old slot layout.** After yellow moved to
+  the external spool it proposed filament 1 (black) -> Ext and 2 (yellow) ->
+  A1, and its preview showed a brown-and-black catbus. Correct the dropdowns
+  and untick "merge the same colours" (irreversible), or skip the sync: the
+  send dialog's mapping is what decides.
+- **The send dialog's thumbnail uses the printer's record of each spool.** An
+  external spool's colour is whatever was last entered for it, so the yellow
+  areas rendered dark while the mapping was right. Fix it in Device -> the
+  auxiliary nozzle's external spool.
+- **The plastic is mostly purge.** The figure is at most 21 g solid; the
+  other ~48 g is prime tower and colour changes (with one colour on the
+  auxiliary; about twice that on one nozzle). An estimate from each layer's
+  colours and the file's own purge matrix, cheapest order per layer, one
+  nozzle: 252 changes and ~93 g of purge with black pupils, 234 and ~86 g
+  with brown or white ones. Black was on only 18 of 208 layers, so dropping
+  it saves ~7 g. Yellow, brown and white changing on nearly every layer is
+  the cost, and only printing several at once shares it (the designer's
+  advice).
+  Measured by Bambu Studio's slice, brown pupils, everything on the main
+  nozzle (Custom grouping): one copy 123.24 g and 8h50m, two copies
+  137.54 g and 11h15m. The second copy costs 14 g and 2h25m, so the figure
+  is 14 g and the rest, 109 g, is per plate. The estimate's 86 g leaves
+  23 g: `filament_prime_volume` (30 mm3 after each of 234 changes, ~9 g)
+  and the tower's own walls.
+- **Coarser layers would fuse it.** 0.16 mm layers cut the estimated purge
+  from 86 to 64 g and 0.20 mm to 51 g, but the designer's "0.12mm High
+  Quality" is load-bearing. The clearances are 0.34-0.42 mm between each
+  leg and the chassis and 0.14 mm under each axle pin. Sliced on the
+  coarser grids (every part's section on layer k against every other
+  part's on layer k-1), 0.16 mm stacks 8 part pairs that 0.12 mm keeps
+  apart and 0.20 mm stacks 6, with up to 4.5 mm2 of leg resting directly
+  on chassis. Leave a flexi's layer height alone.
+- **Flush into infill cannot help a figure this small.** Solid volume is
+  ~16.7 cm3, printed ~11.1 cm3, so the sparse region is ~6.6 cm3 and its
+  infill ~1 cm3 (~1.2 g) per copy: the most purge it could absorb.
+
+Loading the auxiliary nozzle purged the previous filament for a while; that
+is flushing the old colour out, and expected.

@@ -39,6 +39,15 @@ uv run scripts/verify.py out/abc.3mf
 uv run app.py                     # local workbench, http://127.0.0.1:8765
 ```
 
+For a project someone else made (a download with errors, the wrong colours,
+or slots that do not match your AMS):
+
+```bash
+uv run scripts/repair_3mf.py download.3mf --out out/fixed.3mf     # open/non-manifold edges, paint kept
+uv run scripts/reslot_3mf.py out/fixed.3mf --order 4 1 3 2 --out out/ams.3mf
+uv run scripts/overhangs.py out/ams.3mf    # what "floating cantilever" is pointing at
+```
+
 Every script has `--help`.
 
 ## More

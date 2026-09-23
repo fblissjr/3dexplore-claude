@@ -19,3 +19,11 @@ build/
 dist/
 .venv/
 .DS_Store
+
+# .claude/ is local by default: settings, memory and worktrees stay on this
+# machine. Only skills listed here are tracked, one folder per skill, so a new
+# file dropped under .claude/ is never published by accident.
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/fix-downloaded-3mf/
