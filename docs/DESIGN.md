@@ -1281,7 +1281,7 @@ differs is what is mixed into them, and that decides strength, nozzle wear
 and what the surface does. The Bambu Studio preset for each comes off the
 spool's RFID through the AMS; pick it by hand only when loading a spool
 without a tag. Sources are Bambu's product pages and owner reports, as
-marked; only PLA Basic has been printed for this repo's own parts.
+marked. None of these filament tips has been tested by a print in this repo.
 
 | filament | what is in it | nozzle | strength | right for | wrong for |
 |---|---|---|---|---|---|
@@ -1299,7 +1299,7 @@ on any other printer before running an abrasive spool.
 Tips per type, each tied to a project here:
 
 - **Basic: the default for anything that holds a load.** The Apple Watch
-  wall stand was printed in white Basic: its screw bosses take the clamping
+  wall stand was sliced in white Basic: its screw bosses take the clamping
   of a flat-head screw and the pull of a watch coming off its charger, and
   that is exactly the load Matte's weaker layers fail under. The skeleton
   scan's supports and the catbus flexi's joints are the same case: a joint
