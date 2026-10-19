@@ -23,7 +23,8 @@ import trimesh
 
 from .validation import transform
 
-__all__ = ["Mesh", "read_meshes", "replace_mesh", "parts", "components", "world_parts", "rewrite"]
+__all__ = ["Mesh", "read_meshes", "replace_mesh", "parts", "components", "world_parts", "rewrite",
+           "pin_nozzles"]
 
 _OBJECT = re.compile(r'<object id="(\d+)"[^>]*>(.*?)</object>', re.S)
 _VERTEX = re.compile(r'<vertex\s+x="([^"]+)"\s+y="([^"]+)"\s+z="([^"]+)"\s*/>')
@@ -152,3 +153,41 @@ def rewrite(src, dst, replace):
             data = replace.get(info.filename)
             zout.writestr(info, zin.read(info.filename) if data is None else data,
                           compress_type=zipfile.ZIP_DEFLATED)
+
+
+_MAP = re.compile(r'("filament_map"\s*:\s*\[)(.*?)(\])', re.S)
+_MAP_MODE = re.compile(r'("filament_map_mode"\s*:\s*")[^"]*(")')
+_PLATE_MODE = re.compile(r'(<metadata key="filament_map_mode" value=")[^"]*("\s*/>)')
+_PLATE_MAPS = re.compile(r'(<metadata key="filament_maps" value=")([^"]*)("\s*/>)')
+
+
+def pin_nozzles(project, model_settings, nozzle=1):
+    """(project, model_settings, places patched): every filament pinned to
+    `nozzle` -- an int, or {slot: nozzle} with the rest left as they are --
+    and `filament_map_mode` set to Manual, the only mode in which the file's
+    map wins over the slicer's grouping.
+
+    Both texts, because the plate keeps its own copy of the map
+    (`filament_maps`) and that copy is the one the GUI used (DESIGN.md, "What
+    the X2D GUI did with it"). Text edits on the two keys only, so the rest of
+    a GUI save stays byte for byte. A file without a nozzle map (one nozzle)
+    comes back unchanged with nothing patched."""
+    pick = (lambda slot, old: str(nozzle)) if isinstance(nozzle, int) else \
+        (lambda slot, old: str(nozzle.get(slot, old)))
+    done = []
+
+    def json_list(m):
+        vals = re.findall(r'"([^"]*)"', m.group(2))
+        it = iter(pick(i, v) for i, v in enumerate(vals, 1))
+        return m.group(1) + re.sub(r'"[^"]*"', lambda _: f'"{next(it)}"', m.group(2)) + m.group(3)
+
+    if _MAP.search(project):
+        project = _MAP.sub(json_list, project, count=1)
+        project = _MAP_MODE.sub(r"\1Manual\2", project, count=1)
+        done.append("project_settings.config")
+    if _PLATE_MAPS.search(model_settings) or (done and _PLATE_MODE.search(model_settings)):
+        model_settings = _PLATE_MAPS.sub(lambda m: m.group(1) + " ".join(
+            pick(i, v) for i, v in enumerate(m.group(2).split(), 1)) + m.group(3), model_settings)
+        model_settings = _PLATE_MODE.sub(r"\1Manual\2", model_settings)
+        done.append("model_settings.config")
+    return project, model_settings, done

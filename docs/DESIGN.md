@@ -36,6 +36,7 @@ x2d/paint.py      paint_color strings: parse, remap, whole-triangle codes
 x2d/repair.py     local mesh repair that keeps every other triangle and its paint
 x2d/reslot.py     move a project's filaments to other slots, paint included
 x2d/overhang.py   floating islands, bridges and cantilevers on the layer grid
+x2d/wallmount.py  a printed object turned wall-mounted: trim, screw bosses, strip fit
 app.py, web/      local upload workbench and model viewer
 scripts/          CLI generators, preflight, local slicing, fixes for downloaded projects
 .claude/skills/  workflows for Claude Code and Cowork, one folder per skill
@@ -1203,3 +1204,142 @@ trapped inside the body and could have fused the flexi joints.
 
 Loading the auxiliary nozzle purged the previous filament for a while; that
 is flushing the old colour out, and expected.
+
+## Wall mounts: `x2d/wallmount.py`, `scripts/wallmount_3mf.py`
+
+The first case was kaz3d's Apple Watch charging stand (MakerWorld 935496, CC
+BY-SA), wanted on the wall of a top bunk beside a bedside caddy. The rule that
+fell out of it: **the face a part prints on is the wall face.** The stand
+prints lying on its side, and on a desk that side is upright, so putting it on
+the wall keeps the watch at the same 45 degrees. No rotation, no new support,
+and the adhesive (if any) is loaded in shear, which is what strips hold best.
+The other obvious design, the desk foot screwed to the wall, would have stuck
+86 mm out from the wall instead of 36 and put a peeling load on the fixing.
+
+Everything is in one **wall frame**: X along the wall, U up it, mm, origin at
+the centre of the footprint, with `--up` naming the bed direction that points
+up the wall. The survey image, `--trim`, `--holes`, the report and the
+front view all use it, so a number read off one is typed into the next.
+
+What the edits are, and why each is shaped the way it is:
+
+- **Trim** removes what the wall makes useless (the desk foot) above the
+  plate, never the plate itself: the plate is the wall contact.
+- **Screws** are the widest *level* pair of countersunk bosses that clear
+  the plate's edge by 0.5 mm and anything above the plate by 1 mm. Level, so
+  they are marked with a spirit level, not a template; widest, because
+  spacing is what resists a pull twisting the object off the wall.
+  "Anything above" is the projection of the whole part above the plate, not
+  a section near it: a lip 25 mm up blocks a screwdriver as surely as a wall
+  beside the hole. Bosses default to a #6 / M3.5-M4 flat head (4.2 mm
+  shaft, 8.5 mm head at 90 degrees, 6 mm radius, 3 mm above the plate),
+  because a 3 mm plate is too thin to countersink.
+- **Strips are measured, not assumed.** `strip_fit` finds the longest strip
+  of each width that fits flat on the back. The watch stand's back looks
+  large (2,500 mm2) and is mostly the ring's open middle; the rim is 9 mm
+  wide. The only patch a 16 mm Command strip fits is 41 mm long, on the
+  plate below the ring, and the first advice given (strips across the ring)
+  had to be corrected. Screws were the recommendation for a bunk anyway: a
+  watch pulled off its charger loads the mount in tension.
+- **Mirror** reflects across the wall's vertical axis, so a part that faces
+  one way along the wall faces the other. It also flips triangle winding;
+  a reflected mesh with its faces unflipped is inside out.
+- **Pin** every filament to the main nozzle in both places the file keeps
+  the map (`archive.pin_nozzles`), for the reason in "The one thing to get
+  right".
+
+Booleans renumber triangles, so a painted part is refused rather than
+silently stripped of its paint.
+
+A trim line that cuts through a fillet leaves a sliver: on the watch stand,
+trimming at U = -22.5 left a 0.3 mm strip of the foot's fillet along the whole
+plate, and the screw search, correctly treating it as material, found no room
+at all. Trimming at -20 cleared it. The error message now names this.
+
+The script reproduces the hand-built file that was sliced: holes 41.8 mm
+apart and 6.7 mm above the bottom edge, volume 31,480 mm3 against 31,484.
+
+Observed in Bambu Studio's GUI on the X2D (the hand-built file, same
+geometry): it opened with "Custom" grouping and the one filament under Main
+nozzle, kept that through slicing, and the send dialog mapped it to AMS A4 as
+asked. 54m47s, 24.68 g. So a file pinned in both places stays pinned through
+open and slice; whether it survives an AMS Sync is still not seen. **Not yet
+printed or mounted.**
+
+Showing where it goes was done by hand: the front view warped into the
+person's photo with an affine transform, scaled from an object of known size
+(a puck light, ~80 mm), with a zoomed inset because a hand-sized part is a
+few dozen pixels in a photo of a wall. It is an estimate and is labelled as
+one. No script: one case is not a pattern.
+
+## Filaments: which Bambu PLA for which print
+
+The spools on hand are Bambu PLA Basic, Matte, Silk+, Galaxy, Glow and
+Translucent. All six are PLA, so they print at similar temperatures, share
+the same purge behaviour, soften in a hot car, and need no enclosure. What
+differs is what is mixed into them, and that decides strength, nozzle wear
+and what the surface does. The Bambu Studio preset for each comes off the
+spool's RFID through the AMS; pick it by hand only when loading a spool
+without a tag. Sources are Bambu's product pages and owner reports, as
+marked. None of these filament tips has been tested by a print in this repo.
+
+| filament | what is in it | nozzle | strength | right for | wrong for |
+|---|---|---|---|---|---|
+| Basic | plain PLA | any | the reference | functional parts, anything screwed, snapped or flexed | nothing in particular |
+| Matte | light-scattering filler; density 1.32 against 1.26 in the capture | any | **weaker layer bonds** (owner reports: snaps along layers by hand) | display pieces, flat colour plates, anything where layer lines show | screw bosses, snap fits, thin flexing walls, support material |
+| Silk+ | gloss additive | any | Bambu claims better adhesion than generic silk; not measured | decorative shapes with curved walls that catch light | flat relief colours (the shine reads as colour change); fine detail |
+| Galaxy | sparkle particles | **hardened steel** recommended | like Basic, per Bambu; not measured | cases, gifts, anything handled (sparkle hides layer lines and scuffs) | 0.2 mm nozzle |
+| Glow | phosphor powder | **hardened steel required** for regular use; not on AMS lite | rough filament; treat as Matte-ish until tested | night-time finders, switch markers, pulls | 0.2 mm nozzle; thin parts (glow scales with thickness) |
+| Translucent | clear base, tinted | any | like Basic | light diffusers, lamp shades, anything lit from behind | parts where the infill would show through |
+
+The X2D in the reference capture reports `nozzle_type` hardened steel on
+every variant, so Galaxy and Glow need no nozzle change on it. Check the key
+on any other printer before running an abrasive spool.
+
+Tips per type, each tied to a project here:
+
+- **Basic: the default for anything that holds a load.** The Apple Watch
+  wall stand was sliced in white Basic: its screw bosses take the clamping
+  of a flat-head screw and the pull of a watch coming off its charger, and
+  that is exactly the load Matte's weaker layers fail under. The skeleton
+  scan's supports and the catbus flexi's joints are the same case: a joint
+  that flexes every time is a layer bond under tension.
+- **Matte: looks, not loads.** Best on the emoji and name plates, where a flat
+  relief face shows every layer line in a gloss filament. Do not use it as a
+  support interface (already in "What actually goes in the aux nozzle"),
+  and expect it to be heavier: 1.32 g/cm3 against 1.26 per the capture, so
+  `mass_g` per slot is not interchangeable. If a Matte part must take a
+  load, owners report printing 5-10 C hotter and with less cooling helps;
+  untested here.
+- **Silk+: slow the outer wall.** Gloss comes from a slow outer wall (Bambu
+  suggests 50 mm/s); the AirPods case design's `outer_wall_speed` of 60 is
+  already close. Silk catches light on curves and turns flat colour regions
+  into a shimmer that reads as a colour change, so keep it off the
+  multi-colour plates. Nozzle range runs hotter (210-240 C) than Basic.
+- **Galaxy: the case and gift filament.** Chosen for the AirPods Pro case
+  (elka 3D's design): a sleeve that is handled all day, where the sparkle
+  hides layer lines and wear. Fit and stiffness are PLA's. The case's
+  inner ledge needs supports (bridges of 15-23 mm on the support settings
+  the designer shipped); clean them off carefully, because that ledge is
+  what grips the AirPods case. Printing it is not yet done.
+- **Glow: thick and charged.** Glow brightness scales with how much material
+  is lit, so it suits solid knobs, labels and markers more than thin shells;
+  a few hours of light recharges it, and Bambu warns that a lot of UV ages
+  PLA. Rough filament: hardened steel nozzle, and Bambu says not to feed it
+  through an AMS lite (the X2D's AMS is fine). A glow light-switch marker or
+  a glow strip on the watch stand's plate would be the natural uses here;
+  neither is made yet.
+- **Translucent: decide what the light should show.** Light passes through
+  walls and shows the infill inside, so either print it as a shell (2-3
+  walls, 0-10% infill, owner advice) for an even glow, or solid. Thin walls
+  pass more light; thick sections deepen the colour. It is the one to pair
+  with the bunk's reading light or an LED puck.
+
+Two rules hold whatever the spool:
+
+- **A colour change costs purge, whatever the filament.** Mixing these in
+  one plate follows the multi-colour sections above: every colour in a
+  shared layer band is a change per layer.
+- **Dry what is wet.** Bambu lists 55 C for 8 h and storage under 20% RH for
+  Galaxy, Glow and Silk+; stringing or a rough surface on a spool that
+  printed well before is moisture first.

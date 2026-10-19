@@ -27,3 +27,4 @@ dist/
 !.claude/skills/
 .claude/skills/*
 !.claude/skills/fix-downloaded-3mf/
+!.claude/skills/add-wall-mount/
