@@ -111,7 +111,9 @@ The human does these; say them in order.
   again; ignore it. To ship a file already pinned, set `filament_map_mode`
   `Manual` and every filament to `1` in **both** places: the plate in
   `model_settings.config` (`filament_maps`) carries its own copy, and that
-  copy is the one the GUI used.
+  copy is the one the GUI used. `x2d.archive.pin_nozzles` does both as a
+  text edit; a downloaded project's plates can disagree (the AirPods case
+  had its tool plate on the auxiliary nozzle).
 - **"Switch diameter" with a blank main nozzle**: not a real mismatch. Close
   it; sync again once the printer is idle.
 - **Send dialog.** Check each filament's slot. The thumbnail uses the
