@@ -1,0 +1,27 @@
+{
+    "type": "process",
+    "name": "0.20mm Standard Safe (X2D)",
+    "inherits": "0.20mm Standard @BBL X2D",
+    "from": "User",
+    "is_custom_defined": "0",
+    "print_settings_id": "0.20mm Standard Safe (X2D)",
+    "version": "02.08.00.09",
+    "brim_type": "auto_brim",
+    "brim_width": "5",
+    "initial_layer_speed": [
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50"
+    ],
+    "initial_layer_infill_speed": [
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50"
+    ]
+}

@@ -117,6 +117,35 @@ def project_settings(ref_3mf, *, pin=None, support_interface=None,
     return cfg
 
 
+def patch_process(cfg, changes):
+    """Set process keys in a capture, and tell Bambu Studio they were set.
+
+    Why the second half: on load Bambu Studio starts from the named system
+    preset and re-applies only the keys listed in different_settings_to_system
+    (entry 0 is the process). A value changed without being listed there is
+    in the file and silently ignored.
+
+    A list-valued process key holds one value per extruder variant (the X2D
+    process has six for `initial_layer_speed`); every entry gets the value,
+    because a first-layer speed that holds on one nozzle only is not the
+    setting anyone asked for. Per-filament keys are refused: they belong to
+    a filament's entry, not the process's.
+    """
+    from .reslot import FILAMENT_KEYS
+    for key, value in changes.items():
+        if key not in cfg:            # a typo must not become a new key
+            raise ValueError(f"{key}: not a key in this capture")
+        if key in FILAMENT_KEYS or key.startswith("filament_"):
+            raise ValueError(f"{key}: per-filament key, not a process setting")
+        old = cfg[key]
+        cfg[key] = [str(value)] * len(old) if isinstance(old, list) else str(value)
+    diff = list(cfg.get("different_settings_to_system") or [""])
+    listed = set(filter(None, diff[0].split(";"))) | set(changes)
+    diff[0] = ";".join(sorted(listed))
+    cfg["different_settings_to_system"] = diff
+    return cfg
+
+
 def _check_resolved(cfg):
     """Refuse a config Bambu Studio only half-resolved.
 

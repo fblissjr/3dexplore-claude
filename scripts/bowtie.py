@@ -22,6 +22,7 @@ REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
 from x2d import Part, default_capture, machine_for, project_settings, write_3mf
+from x2d.project import patch_process
 
 # Proportions as fractions of the overall width, so one number resizes it.
 HEIGHT = 0.50        # outer edge of a wing
@@ -34,27 +35,6 @@ CORNER = 0.04        # outer corner radius: a sharp corner prints as a blob
 # support, a brim would have to be trimmed off the only edges anyone sees, and
 # the front face is a top surface, which ironing smooths.
 FLAT_PART = {"enable_support": "0", "brim_type": "no_brim", "ironing_type": "top"}
-
-
-def patch_process(cfg, changes):
-    """Set process keys in a capture, and tell Bambu Studio they were set.
-
-    Why the second half: on load Bambu Studio starts from the named system
-    preset and re-applies only the keys listed in different_settings_to_system
-    (entry 0 is the process). A value changed without being listed there is
-    in the file and silently ignored.
-    """
-    for key, value in changes.items():
-        if key not in cfg:            # a typo must not become a new key
-            raise ValueError(f"{key}: not a key in this capture")
-        if isinstance(cfg[key], list):
-            raise ValueError(f"{key}: per-filament key, not a process setting")
-        cfg[key] = str(value)
-    diff = list(cfg.get("different_settings_to_system") or [""])
-    listed = set(filter(None, diff[0].split(";"))) | set(changes)
-    diff[0] = ";".join(sorted(listed))
-    cfg["different_settings_to_system"] = diff
-    return cfg
 
 
 def _prism(poly, z0, z1, chamfer):

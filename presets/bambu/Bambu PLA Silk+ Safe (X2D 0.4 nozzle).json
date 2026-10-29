@@ -1,0 +1,23 @@
+{
+    "type": "filament",
+    "name": "Bambu PLA Silk+ Safe (X2D 0.4 nozzle)",
+    "inherits": "Bambu PLA Silk+ @BBL X2D 0.4 nozzle",
+    "from": "User",
+    "is_custom_defined": "0",
+    "filament_settings_id": [
+        "Bambu PLA Silk+ Safe (X2D 0.4 nozzle)"
+    ],
+    "version": "02.08.00.09",
+    "close_fan_the_first_x_layers": [
+        "3"
+    ],
+    "first_x_layer_part_fan_speed": [
+        "0"
+    ],
+    "textured_plate_temp": [
+        "60"
+    ],
+    "textured_plate_temp_initial_layer": [
+        "60"
+    ]
+}
