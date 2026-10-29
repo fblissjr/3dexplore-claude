@@ -37,9 +37,11 @@ x2d/repair.py     local mesh repair that keeps every other triangle and its pain
 x2d/reslot.py     move a project's filaments to other slots, paint included
 x2d/overhang.py   floating islands, bridges and cantilevers on the layer grid
 x2d/wallmount.py  a printed object turned wall-mounted: trim, screw bosses, strip fit
+x2d/presets.py    your own settings as data: importable presets, and a patch on any project
 app.py, web/      local upload workbench and model viewer
 scripts/          CLI generators, preflight, local slicing, fixes for downloaded projects
 .claude/skills/  workflows for Claude Code and Cowork, one folder per skill
+presets/          first_layer.json, the settings; bambu/ holds presets generated from it
 profiles/         your printer captures; gitignored, see profiles/README.md
 samples/          input images for the worked examples; committed, they are inputs
 out/              generated, gitignored
@@ -212,7 +214,7 @@ preset. A project saved with supports on has `enable_support` in entry 0.
 The working assumption, from how the GUI behaves: on load Bambu Studio starts
 from the system preset named in `print_settings_id` and re-applies the keys
 listed there. So a value patched into a capture without being added to the list
-is in the file and may be ignored. `patch_process()` in `scripts/bowtie.py`
+is in the file and may be ignored. `patch_process()` in `x2d/project.py`
 sets the key and lists it, never delists (a listed key that equals the system
 default is harmless; a delisted key that does not is the bug), and refuses a
 key the capture does not have, so a typo cannot become a new setting.
@@ -230,8 +232,9 @@ What was not tried: the same patch *without* the listing. So "unlisted keys
 are ignored" is still an inference, not an observation; only "listed keys are
 applied" is proven. If that experiment is ever run, record the result here.
 
-This belongs in `x2d/project.py` beside `pin=` and `colors=` once a second
-script needs it; one caller is not yet a pattern.
+It lives in `x2d/project.py` now that a second caller (`x2d/presets.py`)
+needs it. A list-valued process key is one value per extruder variant, and
+every entry gets the value.
 
 ## Supports
 
@@ -1271,6 +1274,69 @@ person's photo with an affine transform, scaled from an object of known size
 (a puck light, ~80 mm), with a zoomed inset because a hand-sized part is a
 few dozen pixels in a photo of a wall. It is an estimate and is labelled as
 one. No script: one case is not a pattern.
+
+## Your own defaults: `presets/first_layer.json`, `scripts/first_layer.py`
+
+Weak first layers on thin or tall parts, fixed the usual way: a brim where it
+is needed, a slower first layer, no part fan for three layers, and a hotter
+textured plate for PLA. The settings are one data file, named as Bambu Studio
+names them, and they reach the printer two ways, because neither covers the
+other:
+
+- **Presets to import** (`presets/bambu/`, File > Import > Import Configs).
+  Each inherits a system preset and carries only these keys, so everything
+  else keeps following Bambu's updates. They set the default for a new
+  project.
+- **A patch on a project** (`first_layer.py apply`). A `.3mf` carries its own
+  settings, and opening a download replaces your presets with its designer's.
+  The patch writes the same keys into `project_settings.config` and lists
+  them in `different_settings_to_system`, the same rule as `patch_process`.
+
+What each value is, against Bambu's public profiles (BambuStudio master,
+`resources/profiles/BBL`, read 2026-10-29), so the size of each change is
+clear:
+
+| key | ours | X2D stock | from |
+|---|---|---|---|
+| `brim_type` | `auto_brim` | `auto_brim` (default, `PrintConfig.cpp`) | a download's `no_brim` is what this undoes |
+| `brim_width` | 5 | 5 (`fdm_process_common`) | used by "Outer brim only"; Auto sizes its own, up to 18 mm (`Brim.cpp`) |
+| `initial_layer_speed` | 50 | 50, all six variants | walls of layer one; already there on the X2D |
+| `initial_layer_infill_speed` | 50 | **105** | the real change: layer one's solid infill |
+| `close_fan_the_first_x_layers` | 3 | **1** (`fdm_filament_pla`) | layers that get `first_x_layer_part_fan_speed` |
+| `first_x_layer_part_fan_speed` | 0 | 0 (default) | stated, so "fan off" does not hang on a default |
+| `textured_plate_temp`, `_initial_layer` | 60 | **55** (Translucent: 60 on layer one) | PLA only |
+| `curr_bed_type` | Textured PEI Plate | project-level | project patch only; no preset holds it |
+
+Three things worth knowing:
+
+- **Filament keys go only to filaments of the listed type.** The file is keyed
+  by `filament_type`; a PETG slot in the same project keeps its 70 C. Adding a
+  type is one more entry, not code.
+- **The X2D's auxiliary fan is left alone.** `first_x_layer_fan_speed` is 40%
+  on the X2D PLA presets, and it is the auxiliary (chamber-side) fan, not the
+  part fan. "Fan off" here means the part fan; add that key to the file if the
+  first layers still lift.
+- **A download's per-object settings win, and are reported, not removed.**
+  Bambu Studio applies an object's or plate's own `brim_type` over the
+  project's. Those are the designer's choice for that part (see "Someone
+  else's project"), so `apply` lists them under `overridden_in_model` and
+  leaves them. Keys a file does not have (an older Bambu Studio) are listed
+  under `not_in_file` and not added.
+
+Orientation and brim ears are per model and stay in the GUI: Auto-orient or
+lay-on-face, and the brim-ear tool.
+
+Preset names drop `@BBL`, which marks a system preset:
+"0.20mm Standard Safe (X2D)", "Bambu PLA Matte Safe (X2D 0.4 nozzle)".
+`presets/bambu/` is generated and committed so it imports without running
+anything; a test holds it to the data file.
+
+**Not yet seen in Bambu Studio.** The preset files follow the shape of a user
+preset (`from: User`, `inherits`, the `*_settings_id`), and the per-variant
+lists match the parent's six entries, but neither the import nor a patched
+project has been opened in the GUI or printed here. Check on first use that
+the imported presets appear under the X2D with these values, and that a
+patched project shows the keys orange (changed from preset).
 
 ## Filaments: which Bambu PLA for which print
 

@@ -92,7 +92,19 @@ of a few mm and cantilevers of a mm or two are fine in PLA. On flexi
 print-in-place models, supports get trapped inside hollow bodies and can
 fuse the joints: recommend against them unless something actually floats.
 
-## 6. Hand off to Bambu Studio
+## 6. Safer first layer
+
+A download's settings replace the user's presets on open. If they want their
+first-layer defaults (`presets/README.md`):
+
+```bash
+uv run scripts/first_layer.py apply out/download_ams.3mf --out out/download_safe.3mf
+```
+
+Pass on anything under `overridden_in_model` (a designer's per-object
+`brim_type`, say): it still wins, and changing it is their call.
+
+## 7. Hand off to Bambu Studio
 
 The human does these; say them in order.
 
@@ -133,7 +145,7 @@ The human does these; say them in order.
   0.2 mm stacks legs directly on the chassis). Flush into infill can absorb
   only the infill, ~1 g on a figure this size.
 
-## 7. Record
+## 8. Record
 
 Anything new the GUI did, and how the print came out, goes in
 `docs/DESIGN.md` under "What the X2D GUI did with it", marked observed or

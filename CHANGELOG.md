@@ -4,6 +4,16 @@ All notable changes to this project. Versions follow semver.
 
 ## Unreleased
 
+Safer first layers, from one data file (`presets/first_layer.json`).
+
+- `presets/bambu/`: process and PLA filament presets to import into Bambu
+  Studio (File > Import > Import Configs), inheriting the stock X2D presets.
+- `scripts/first_layer.py apply` and `x2d/presets.py`: patch the same
+  settings into any project, PLA slots only, and report what a download's
+  per-object settings override.
+- `patch_process` moved from `scripts/bowtie.py` to `x2d/project.py`, and
+  sets every entry of a per-variant process key.
+
 Projects someone else made, from a MakerWorld download that Bambu Studio
 flagged with 273 open and 34 non-manifold edges.
 

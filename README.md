@@ -48,6 +48,15 @@ uv run scripts/reslot_3mf.py out/fixed.3mf --order 4 1 3 2 --out out/ams.3mf
 uv run scripts/overhangs.py out/ams.3mf    # what "floating cantilever" is pointing at
 ```
 
+Safer first layers (brim, slow first layer, fan off, 60 C textured plate),
+as presets to import into Bambu Studio and as a patch for any download:
+
+```bash
+uv run scripts/first_layer.py apply download.3mf --out out/download_safe.3mf
+```
+
+See [presets/README.md](presets/README.md).
+
 Every script has `--help`.
 
 ## More
